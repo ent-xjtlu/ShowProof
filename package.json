@@ -126,6 +126,17 @@
       {
         "from": "build/ocr-data",
         "to": "ocr-data"
+      },
+      {
+        "from": "crawlers",
+        "to": "crawlers",
+        "filter": [
+          "**/*",
+          "!.venv{,/**/*}",
+          "!out{,/**/*}",
+          "!**/__pycache__{,/**/*}",
+          "!**/*.pyc"
+        ]
       }
     ]
   },

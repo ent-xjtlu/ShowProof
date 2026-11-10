@@ -266,6 +266,7 @@ const agentGrants = new Map<string, AgentGrant>();
 const agentWorkspacesRoot = path.join(dataDir, 'agent-workspaces');
 const appUrl = process.env.SHIZHENG_APP_URL || `http://127.0.0.1:${process.env.PORT || 8787}`;
 const agentMcpScript = process.env.SHIZHENG_AGENT_MCP_SCRIPT || path.join(rootDir, 'server/agent-mcp.mjs');
+const crawlerDir = process.env.SHIZHENG_CRAWLER_DIR || path.join(rootDir, 'crawlers');
 
 function downloadHash(chatId: string, relative: string, kind: 'file' | 'pdf'): string {
   return crypto.createHash('sha256').update(`${db.downloadSecret || ''}:${kind}:${chatId}:${relative}`).digest('hex').slice(0, 32);
@@ -666,6 +667,7 @@ function buildMcpServers(settings?: IntegrationSettings, options?: { includeCata
         { name: 'SHIZHENG_APP_URL', value: appUrl },
         { name: 'SHIZHENG_AGENT_TOKEN', value: options.agentToken },
         { name: 'SHIZHENG_CHAT_ID', value: options.chatId || '' },
+        { name: 'SHIZHENG_CRAWLER_DIR', value: crawlerDir },
       ],
     });
   }
@@ -1916,6 +1918,26 @@ app.post('/api/agent/exhibitions/:id/restore', (req, res) => {
   exhibition.updatedAt = now();
   flushDb(true);
   res.json({ ok: true, exhibition: agentExhibitionView(exhibition) });
+});
+
+app.get('/api/agent/crawlers', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:read');
+  if (!grant) return;
+  const scripts = [
+    { file: 'trafilatura_extract.py', engine: 'Trafilatura', license: 'Apache-2.0', requires: 'requests, trafilatura', usage: 'python3 trafilatura_extract.py --file urls.txt --out out/trafilatura' },
+    { file: 'crawl4ai_fetch.py', engine: 'Crawl4AI', license: 'Apache-2.0', requires: 'crawl4ai', usage: 'python3 crawl4ai_fetch.py --file urls.txt --out out/crawl4ai' },
+    { file: 'scrapling_fetch.py', engine: 'Scrapling', license: 'BSD-3-Clause', requires: 'scrapling', usage: 'python3 scrapling_fetch.py --file urls.txt --out out/scrapling' },
+    { file: 'firecrawl_client.py', engine: 'Firecrawl', license: 'AGPL-3.0', requires: 'FIRECRAWL_API_KEY', usage: 'FIRECRAWL_API_KEY=... python3 firecrawl_client.py --file urls.txt --out out/firecrawl' },
+    { file: 'scrapy_batch/scrapy.cfg', engine: 'Scrapy', license: 'BSD-3-Clause', requires: 'scrapy', usage: 'cd scrapy_batch && scrapy crawl batch -a urls=../urls.txt -O ../out/scrapy/records.jsonl' },
+  ].map((item) => ({ ...item, exists: fs.existsSync(path.join(crawlerDir, item.file)) }));
+  res.json({
+    dir: crawlerDir,
+    python: process.env.SHIZHENG_PYTHON || 'python3',
+    install: `cd ${crawlerDir} && ./setup.sh          # 核心依赖\ncd ${crawlerDir} && ./setup.sh --optional  # 动态抓取/Scrapy`,
+    readme: path.join(crawlerDir, 'README.md'),
+    scripts,
+    note: '脚本是可选工具，依赖需要用户在本机安装；采集时遵守 robots.txt 与目标站点条款。',
+  });
 });
 
 app.get('/api/agent/files', (req, res) => {

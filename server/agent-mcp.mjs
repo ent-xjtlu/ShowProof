@@ -174,6 +174,11 @@ const tools = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'shizheng_crawlers',
+    description: '列出随应用附带的可选爬虫脚本（Trafilatura / Crawl4AI / Scrapling / Firecrawl / Scrapy）及安装命令。需要批量抓取展会官网、名录或报告时，先调用它确认路径与依赖，再用 bash 运行对应脚本。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'shizheng_qcc_verify',
     description: '调用企查查 MCP 核验企业（工商信息、风险）。调用前会先请用户在界面上审核；用户同意后才真正查询，结果保存为工作区文件。用户明确要求核验企业、且已配置企查查时使用。',
     inputSchema: {
@@ -229,6 +234,9 @@ async function callTool(name, args = {}) {
   }
   if (name === 'shizheng_files_list') {
     return textResult(await call('/api/agent/files'))
+  }
+  if (name === 'shizheng_crawlers') {
+    return textResult(await call('/api/agent/crawlers'))
   }
   if (name === 'shizheng_qcc_verify') {
     const companies = Array.isArray(args.companies) ? args.companies.filter((item) => typeof item === 'string' && item.trim()) : []

@@ -43,6 +43,11 @@ const EXAMPLES: { title: string; note: string; prompt: string }[] = [
     prompt: '把这次调研整理成一份正式报告，包含摘要、展会清单、参展企业、成本与建议，附来源链接，保存成可下载文件。',
   },
   {
+    title: '批量抓取网页（可选脚本）',
+    note: '自带 Trafilatura / Crawl4AI / Scrapling / Firecrawl / Scrapy 模板；需先在本机运行 crawlers/setup.sh。',
+    prompt: '列出可用的爬虫脚本，用 trafilatura 抓取 urls.txt 里的页面，输出到工作区，并把结果整理成带来源的报告。',
+  },
+  {
     title: '下载与导出 PDF',
     note: '右侧「文件」栏里每个 Markdown 都有「PDF」按钮；下载链接带 hash，可直接打开。',
     prompt: '把刚才生成的报告导出 PDF，并告诉我文件名。',

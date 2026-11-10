@@ -147,6 +147,14 @@ test('report validation rejects empty or unsourced reports and accepts a sourced
   assert.match(valid.payload.downloadUrl, /files\/download/);
 });
 
+test('crawler presets are exposed to the agent', async () => {
+  const response = await agent('/api/agent/crawlers');
+  assert.equal(response.status, 200);
+  assert.ok(response.payload.scripts.length >= 5);
+  assert.ok(response.payload.scripts.every((script) => script.exists));
+  assert.match(response.payload.install, /setup\.sh/);
+});
+
 test('QCC verification is rejected when QCC MCP is not configured', async () => {
   const response = await agent('/api/agent/qcc/verify', { method: 'POST', body: JSON.stringify({ companies: ['测试公司'] }) });
   assert.equal(response.status, 503);

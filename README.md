@@ -207,6 +207,29 @@ assets/fonts/         # PDF 中文字体
 docs/                 # 设计、分发、Windows 指南
 ```
 
+## 爬虫脚本工具箱（可选）
+
+`crawlers/` 附带 5 个可直接运行的采集模板，按引擎划分，便于二次开发：
+
+| 脚本 | 引擎 | 许可证 | 用途 |
+|---|---|---|---|
+| `trafilatura_extract.py` | Trafilatura | Apache-2.0 | 批量正文提取，最轻量 |
+| `crawl4ai_fetch.py` | Crawl4AI | Apache-2.0 | 动态网页 → Markdown |
+| `scrapling_fetch.py` | Scrapling | BSD-3-Clause | 结构不统一页面 |
+| `firecrawl_client.py` | Firecrawl | AGPL-3.0 | 托管采集/搜索（需 API Key） |
+| `scrapy_batch/` | Scrapy | BSD-3-Clause | 队列、并发、重试、去重 |
+
+```bash
+cd crawlers
+./setup.sh              # 核心依赖
+./setup.sh --optional   # crawl4ai / scrapling / scrapy
+python3 trafilatura_extract.py --file urls.example.txt --out out/trafilatura
+```
+
+每个脚本输出 `records.jsonl`、`pages/*.md` 和 `errors.jsonl`。Agent 可以先调用 `shizheng_crawlers` 获取实际路径与安装命令，再用 bash 运行；打包版脚本位于应用资源目录 `crawlers/`。
+
+详细说明、合规与限速建议见 [crawlers/README.md](crawlers/README.md)。
+
 ## 测试
 
 ```bash
