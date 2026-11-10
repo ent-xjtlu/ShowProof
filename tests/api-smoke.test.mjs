@@ -21,7 +21,8 @@ async function waitForHealth() {
 test.before(async () => {
   fs.rmSync(testDataDir, { recursive: true, force: true });
   const tsxCli = path.resolve('node_modules/tsx/dist/cli.mjs');
-  child = spawn(process.execPath, [tsxCli, 'server/index.ts'], { env: { ...process.env, PORT: String(port), DATA_DIR: testDataDir, DEEPSEEK_HARNESS_COMMAND: '', DEEPSEEK_API_KEY: '' }, stdio: 'ignore' });
+  const probeArgs = ['-e', "require('node:fs').writeFileSync(require('node:path').join(process.env.DATA_DIR, 'spawn-cwd.txt'), process.cwd())"];
+  child = spawn(process.execPath, [tsxCli, 'server/index.ts'], { env: { ...process.env, PORT: String(port), DATA_DIR: testDataDir, DEEPSEEK_HARNESS_COMMAND: '', DEEPSEEK_HARNESS_ARGS: JSON.stringify(probeArgs), DEEPSEEK_API_KEY: '' }, stdio: 'ignore' });
   await waitForHealth();
   const setup = await fetch(`http://localhost:${port}/api/auth/setup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Test analyst', email: 'test@example.com', password: 'test-password-123' }) });
   assert.equal(setup.status, 201);
@@ -64,6 +65,21 @@ test('ACP settings are stored without returning the API key', async () => {
   const payload = await (await fetch(`http://localhost:${port}/api/integrations`, { headers: { authorization: `Bearer ${token}` } })).json();
   assert.equal(payload.acp.configured, true);
   assert.equal(Object.hasOwn(payload.acp, 'apiKey'), false);
+});
+
+test('research launches its child in a physical per-user workspace', async () => {
+  const login = await fetch(`http://localhost:${port}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'test@example.com', password: 'test-password-123' }) });
+  const { user, token } = await login.json();
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+  const saved = await fetch(`http://localhost:${port}/api/integrations`, { method: 'PUT', headers, body: JSON.stringify({ deepseekApiKey: 'test-key' }) });
+  assert.equal(saved.status, 200);
+  const task = await fetch(`http://localhost:${port}/api/research`, { method: 'POST', headers, body: JSON.stringify({ query: 'workspace probe' }) });
+  assert.equal(task.status, 202);
+  const marker = path.join(testDataDir, 'spawn-cwd.txt');
+  for (let attempt = 0; attempt < 100 && !fs.existsSync(marker); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(fs.readFileSync(marker, 'utf8'), fs.realpathSync(path.join(testDataDir, 'research-workspaces', user.id)));
 });
 
 test('custom ACP provider accepts all three supported protocols without returning its key', async () => {

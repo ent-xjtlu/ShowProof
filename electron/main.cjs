@@ -1,5 +1,5 @@
 const { app, BrowserWindow, shell } = require('electron')
-const { join } = require('node:path')
+const { join, dirname, delimiter } = require('node:path')
 const fs = require('node:fs')
 const { spawn } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
@@ -36,6 +36,8 @@ async function prepareHarness() {
   const bundledNode = join(process.resourcesPath, 'node-runtime', process.platform === 'win32' ? 'node.exe' : 'node')
   const nodeCommand = app.isPackaged && fs.existsSync(bundledNode) ? bundledNode : (process.env.DEEPSEEK_NODE_COMMAND || 'node')
   if (app.isPackaged) {
+    // pnpm lifecycle scripts invoke node by name, including on first install.
+    if (fs.existsSync(bundledNode)) process.env.PATH = [dirname(bundledNode), process.env.PATH].filter(Boolean).join(delimiter)
     process.env.SHIZHENG_REPORT_FONT = join(process.resourcesPath, 'fonts', 'NotoSansCJK-Regular.ttc')
     process.env.SHIZHENG_OCR_LANG_PATH = join(process.resourcesPath, 'ocr-data')
     process.env.SHIZHENG_SCREENSHOT_DIR = join(userData, 'screenshots')

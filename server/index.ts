@@ -443,7 +443,7 @@ class DeepSeekAcpBridge {
   private initialized = false;
   private grantToken?: string;
 
-  constructor(private cwd: string, private userId: string, private variant: 'exhibition' | 'chat' = 'exhibition', private chatId?: string) {}
+  constructor(private userId: string, private cwd = path.join(dataDir, 'research-workspaces', userId), private variant: 'exhibition' | 'chat' = 'exhibition', private chatId?: string) {}
 
   /** 对话会话的令牌按需签发；一个桥接实例对应一个对话。 */
   private agentToken(): string | undefined {
@@ -468,6 +468,7 @@ class DeepSeekAcpBridge {
   private launch() {
     const settings = getIntegrationSettings(this.userId);
     const { command, args } = this.getCommand(settings);
+    fs.mkdirSync(this.cwd, { recursive: true });
     this.child = spawn(command, args, {
       cwd: this.cwd,
       env: {
@@ -709,7 +710,7 @@ async function runResearch(researchId: string) {
   const research = db.researches.find((item) => item.id === researchId); if (!research) return;
   const update = (patch: Partial<Research>) => { Object.assign(research, patch, { updatedAt: now() }); db = readDb(); const index = db.researches.findIndex((item) => item.id === researchId); if (index >= 0) db.researches[index] = research; writeDb(db); };
   try {
-    const bridge = new DeepSeekAcpBridge(rootDir, research.userId);
+    const bridge = new DeepSeekAcpBridge(research.userId);
     activeBridges.set(researchId, bridge);
     const appendEvent = (message: RpcMessage) => {
       const event = summarizeAcpUpdate(message);
@@ -750,7 +751,7 @@ async function runCompanyCheck(researchId: string, company: string) {
   const research = db.researches.find((item) => item.id === researchId); if (!research) return;
   const update = (patch: Partial<Research>) => { Object.assign(research, patch, { updatedAt: now() }); db = readDb(); const index = db.researches.findIndex((item) => item.id === researchId); if (index >= 0) db.researches[index] = research; writeDb(db); };
   try {
-    const bridge = new DeepSeekAcpBridge(rootDir, research.userId);
+    const bridge = new DeepSeekAcpBridge(research.userId);
     activeBridges.set(researchId, bridge);
     const appendEvent = (message: RpcMessage) => {
       const event = summarizeAcpUpdate(message);
@@ -1276,7 +1277,7 @@ async function runDiscovery(discoveryId: string) {
     flushDb(true);
     return;
   }
-  const bridge = new DeepSeekAcpBridge(rootDir, discovery.userId);
+  const bridge = new DeepSeekAcpBridge(discovery.userId);
   activeBridges.set(discoveryId, bridge);
   const touch = (patch: Partial<Discovery>) => { Object.assign(discovery, patch, { updatedAt: now() }); flushDb(); };
   const step = (label: string, detail?: string, status: 'running' | 'completed' | 'failed' = 'running') => {
@@ -1447,7 +1448,7 @@ async function runExhibitorCheck(exhibitionId: string, exhibitorId: string) {
   const exhibitor = exhibition?.exhibitors.find((item) => item.id === exhibitorId);
   if (!exhibition || !exhibitor) return;
   const profile = companyProfileOf(exhibition.userId);
-  const bridge = new DeepSeekAcpBridge(rootDir, exhibition.userId);
+  const bridge = new DeepSeekAcpBridge(exhibition.userId);
   activeBridges.set(`${exhibitionId}:${exhibitorId}`, bridge);
   try {
     const result = await withTimeout(bridge.run(`你是企业核验 Agent。请只使用已挂载的企查查 MCP 工具核验企业“${exhibitor.name}”${exhibitor.country ? `（${exhibitor.country}）` : ''}。${profile ? `该企业正在被评估为「${profile.name}」在展会「${exhibition.name}」中的潜在关系方。` : ''}如果存在多个同名主体，先列出候选并说明需要用户确认，不要猜测主体。请用简体中文输出：工商登记基本信息、股东/实际控制人、关联企业、经营风险要点，控制在 400 字以内；不要编造工商信息。`, () => undefined), 10 * 60 * 1000, '企查查核验超时');
@@ -1710,7 +1711,7 @@ app.post('/api/exhibitions/:id/research', requireUser, (req, res) => {
   if (exhibition.status === 'researching') return res.status(409).json({ error: 'ALREADY_RESEARCHING', message: '该展会正在调查中。' });
   const profile = companyProfileOf(user.id);
   if (!profile) return res.status(400).json({ error: 'COMPANY_PROFILE_REQUIRED', message: '请先填写企业信息。' });
-  const bridge = new DeepSeekAcpBridge(rootDir, user.id);
+  const bridge = new DeepSeekAcpBridge(user.id);
   activeBridges.set(exhibition.id, bridge);
   res.status(202).json({ exhibition });
   void researchExhibition(exhibition.id, profile, bridge, false).finally(() => {
@@ -1727,7 +1728,7 @@ app.post('/api/exhibitions/:id/refresh', requireUser, (req, res) => {
   if (exhibition.status === 'researching') return res.status(409).json({ error: 'ALREADY_RESEARCHING', message: '该展会正在调查中。' });
   const profile = companyProfileOf(user.id);
   if (!profile) return res.status(400).json({ error: 'COMPANY_PROFILE_REQUIRED', message: '请先填写企业信息。' });
-  const bridge = new DeepSeekAcpBridge(rootDir, user.id);
+  const bridge = new DeepSeekAcpBridge(user.id);
   activeBridges.set(exhibition.id, bridge);
   res.status(202).json({ exhibition });
   void researchExhibition(exhibition.id, profile, bridge, true).finally(() => {
@@ -2113,7 +2114,7 @@ app.post('/api/approvals/:id/decide', requireUser, (req, res) => {
 async function runQccApproval(approval: Approval) {
   approval.status = 'running';
   flushDb(true);
-  const bridge = new DeepSeekAcpBridge(rootDir, approval.userId);
+  const bridge = new DeepSeekAcpBridge(approval.userId);
   try {
     const companies = approval.companies.join('、');
     const result = await withTimeout(bridge.run(`你是企业核验 Agent。请只使用已挂载的企查查 MCP 工具核验以下企业：${companies}。逐家列出：主体全称、统一社会信用代码、法定代表人、注册资本、成立日期、经营状态、注册地址、风险提示。找不到或存在多个同名主体时明确说明，不要猜测。最后用简体中文 Markdown 汇总，并保留可回溯的字段来源。`), 8 * 60 * 1000, '企查查核验超时');
@@ -2170,7 +2171,7 @@ async function runChat(chatId: string) {
   };
   const trace: { label: string; detail?: string; at: string }[] = [];
   const workspace = chatWorkspace(chat.id);
-  let bridge = chatBridges.get(chatId) ?? new DeepSeekAcpBridge(workspace, chat.userId, 'chat', chat.id);
+  let bridge = chatBridges.get(chatId) ?? new DeepSeekAcpBridge(chat.userId, workspace, 'chat', chat.id);
   chatBridges.set(chatId, bridge);
   chat.status = 'running';
   chat.error = undefined;
@@ -2187,7 +2188,7 @@ async function runChat(chatId: string) {
       chat.messages.push({ id: id('msg'), role: 'system', text: '上一次 Harness 会话已失效，已开始新会话（之前的上下文不再保留）。', at: now() });
       bridge.close();
       chatBridges.delete(chatId);
-      bridge = new DeepSeekAcpBridge(workspace, chat.userId, 'chat', chat.id);
+      bridge = new DeepSeekAcpBridge(chat.userId, workspace, 'chat', chat.id);
       chatBridges.set(chatId, bridge);
       result = (await attempt(undefined, bridge)).result;
     }
