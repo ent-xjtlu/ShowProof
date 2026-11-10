@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Frontend, server, and Electron build output
+dist/
+dist-server/
+build/
+release/
+*.tsbuildinfo
+*.asar
+*.AppImage
+*.deb
+*.dmg
+*.exe
+*.msi
+*.nsis.7z
+
+# Local application data and runtime state
+data/*
+!data/.gitkeep
+.tmp_research/
+tests/.tmp-data/
+
+# Tool caches and test output
+.vite/
+.vite-temp/
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Logs and temporary files
+*.log
+*.pid
+*.seed
+tmp/
+temp/
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# npm debug files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

@@ -1,0 +1,126 @@
+{
+  "name": "domel-market-intelligence-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/ensure-playwright.mjs && concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx server/index.ts",
+    "dev:client": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "start": "concurrently -k \"npm:serve:server\" \"npm:serve:client\"",
+    "test": "node --test tests/api-smoke.test.mjs",
+    "test:ui": "playwright test",
+    "serve:server": "tsx server/index.ts",
+    "serve:client": "vite preview --host 0.0.0.0 --port 5173",
+    "build:server": "node scripts/build-server.mjs",
+    "desktop:dev": "node scripts/stage-node-runtime.mjs && npm run build && npm run build:server && electron electron/main.cjs",
+    "dist:desktop": "node scripts/stage-node-runtime.mjs && npm run build && npm run build:server && electron-builder"
+  },
+  "dependencies": {
+    "@fontsource-variable/archivo": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.6",
+    "@fontsource/source-serif-4": "^5.2.8",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "cors": "latest",
+    "dotenv": "^18.0.10",
+    "express": "latest",
+    "lucide-react": "latest",
+    "pdfkit": "^0.20.2",
+    "playwright": "^1.65.0",
+    "pnpm": "^11.28.5",
+    "react": "latest",
+    "react-dom": "latest",
+    "tsx": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/cors": "^2.8.19",
+    "@types/express": "latest",
+    "@types/node": "latest",
+    "@types/pdfkit": "^0.17.7",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "latest",
+    "vitest": "latest"
+  },
+  "build": {
+    "appId": "ai.domel.shizheng",
+    "productName": "拾证",
+    "artifactName": "shizheng-intel-desk-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-server/**/*",
+      "electron/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asar": true,
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "maintainer": "support@domel.com",
+      "executableName": "shizheng-intel-desk"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "extraResources": [
+      {
+        "from": "build/node-runtime",
+        "to": "node-runtime"
+      },
+      {
+        "from": "build/pnpm",
+        "to": "pnpm"
+      },
+      {
+        "from": "build/playwright-browsers",
+        "to": "playwright-browsers"
+      },
+      {
+        "from": "build/playwright-runtime",
+        "to": "playwright-runtime"
+      },
+      {
+        "from": "vendor/deepseek-harness",
+        "to": "harness",
+        "filter": [
+          "**/*",
+          "!node_modules{,/**/*}",
+          "!.git{,/**/*}",
+          "!**/tests{,/**/*}",
+          "!**/docs{,/**/*}",
+          "!website{,/**/*}",
+          "!benchmarks{,/**/*}",
+          "!snapshots{,/**/*}"
+        ]
+      }
+    ]
+  },
+  "main": "electron/main.cjs",
+  "description": "拾证 · 市场情报工作台",
+  "author": {
+    "name": "Domel",
+    "email": "support@domel.com"
+  },
+  "homepage": "https://domel.com"
+}

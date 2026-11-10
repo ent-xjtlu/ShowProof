@@ -1,0 +1,11 @@
+[submodule "vendor/awesome-design-md"]
+	path = vendor/awesome-design-md
+	url = https://github.com/voltagent/awesome-design-md.git
+
+[submodule "vendor/deepseek-harness"]
+	path = vendor/deepseek-harness
+	url = https://github.com/deepseek-ai/deepseek-harness.git
+
+[submodule "vendor/dsh-mcp-connector"]
+	path = vendor/dsh-mcp-connector
+	url = https://github.com/duhu2000/dsh-mcp-connector.git

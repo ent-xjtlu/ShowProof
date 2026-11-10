@@ -1,0 +1,11 @@
+{
+  "name": "拾证 · 市场情报工作台",
+  "short_name": "拾证",
+  "description": "AI 辅助市场情报工作台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7f8",
+  "theme_color": "#168f82",
+  "lang": "zh-CN",
+  "icons": [{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
