@@ -70,6 +70,22 @@ jobs:
         shell: bash
         run: ${{ matrix.command }} -- --publish never
 
+      - name: Smoke test packaged Playwright MCP
+        shell: bash
+        run: |
+          resources=release/linux-unpacked/resources
+          runtime=node
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            resources=release/win-unpacked/resources
+            runtime=node.exe
+          fi
+          # Run outside the checkout so project node_modules cannot mask missing dependencies.
+          probe=$(mktemp -d)
+          cp -R "$resources/playwright-runtime" "$probe/"
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' |
+            "$resources/node-runtime/$runtime" "$probe/playwright-runtime/playwright-mcp.mjs" > "$probe/reply.json"
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1])); if (!r.result?.tools.some(t => t.name === 'browser_open')) process.exit(1)" "$probe/reply.json"
+
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v6
         with:

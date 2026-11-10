@@ -2,13 +2,10 @@ import { createInterface } from 'node:readline'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import { assertSafeHttpUrl, isSafeHttpUrl } from './urlSafety.mjs'
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-const runtimeDeps = path.join(here, 'runtime-deps', 'package.json')
-const require = createRequire(fs.existsSync(runtimeDeps) ? runtimeDeps : path.join(here, 'package.json'))
+const require = createRequire(new URL('./runtime-deps/package.json', import.meta.url))
 const { chromium } = require('playwright')
 const ocrLangPath = process.env.SHIZHENG_OCR_LANG_PATH || path.resolve('build/ocr-data')
 const screenshotDir = process.env.SHIZHENG_SCREENSHOT_DIR || path.resolve('screenshots')
