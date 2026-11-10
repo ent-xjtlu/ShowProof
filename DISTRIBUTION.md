@@ -1,16 +1,16 @@
 # 拾证 · 展会与企业信息助手 · 交付说明
 
-版本：0.1.0  
-交付日期：2026-11-10  
+版本：0.1.1  
+交付日期：2026-11-11  
 代码位置：`/home/sfwh/infoboard/domel-market-intelligence-web`
 
 ## 一、交付物
 
 | 平台 | Release 附件 |
 | --- | --- |
-| Linux x86_64 | `shizheng-intel-desk-0.1.0-linux-x86_64.AppImage` |
-| Debian / Ubuntu amd64 | `shizheng-intel-desk-0.1.0-linux-amd64.deb` |
-| Windows x64 | `shizheng-intel-desk-0.1.0-win-x64.exe` |
+| Linux x86_64 | `shizheng-intel-desk-0.1.1-linux-x86_64.AppImage` |
+| Debian / Ubuntu amd64 | `shizheng-intel-desk-0.1.1-linux-amd64.deb` |
+| Windows x64 | `shizheng-intel-desk-0.1.1-win-x64.exe` |
 
 每次发布的 SHA-256 校验值随安装包保存在同一 Release 的 `SHA256SUMS` 文件中。在 Windows 主机上也可以自行构建安装包。
 
@@ -19,7 +19,7 @@ npm ci --legacy-peer-deps
 npm run dist:win
 ```
 
-产物为 `release/shizheng-intel-desk-0.1.0-win-x64.exe`（NSIS，one-click，非 per-machine）。构建脚本会自动准备 Windows x64 Node 运行时与 Playwright Chromium。
+产物为 `release/shizheng-intel-desk-0.1.1-win-x64.exe`（NSIS，one-click，非 per-machine）。构建脚本会自动准备 Windows x64 Node 运行时与 Playwright Chromium。
 
 ### CI 发布
 
@@ -30,10 +30,10 @@ GitHub Actions 工作流位于 `.github/workflows/desktop-release.yml`。推送 
 Linux：
 
 ```bash
-chmod +x release/shizheng-intel-desk-0.1.0-linux-x86_64.AppImage
-./release/shizheng-intel-desk-0.1.0-linux-x86_64.AppImage
+chmod +x release/shizheng-intel-desk-0.1.1-linux-x86_64.AppImage
+./release/shizheng-intel-desk-0.1.1-linux-x86_64.AppImage
 # 或
-sudo dpkg -i release/shizheng-intel-desk-0.1.0-linux-amd64.deb
+sudo dpkg -i release/shizheng-intel-desk-0.1.1-linux-amd64.deb
 ```
 
 - 首次启动会在用户数据目录准备 Harness 运行副本并安装锁定依赖，**需要联网**。

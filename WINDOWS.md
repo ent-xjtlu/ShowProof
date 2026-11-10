@@ -91,7 +91,7 @@ npm run desktop:dev
 npm run dist:win
 ```
 
-产物：`release\shizheng-intel-desk-0.1.0-win-x64.exe`（NSIS）。
+产物：`release\shizheng-intel-desk-0.1.1-win-x64.exe`（NSIS）。
 
 如果 NSIS 打包失败，可先生成免安装目录：
 
