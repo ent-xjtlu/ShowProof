@@ -48,13 +48,13 @@ export function LoginScreen({ setupRequired, onLogin }: Props) {
           <span className="brand__mark" aria-hidden />
           <div>
             <b>拾证</b>
-            <small>市场情报工作台</small>
+            <small>展会与企业信息助手</small>
           </div>
         </div>
-        <p className="login-card__eyebrow mono">DOMEL INTEL DESK · SECURE WORKSPACE</p>
-        <h1>把市场信号，变成判断。</h1>
+        <p className="login-card__eyebrow mono">EXHIBITION INTEL DESK · SECURE WORKSPACE</p>
+        <h1>把展会，变成机会。</h1>
         <p className="login-card__lead">
-          {setupRequired ? '首次使用时创建本机工作账号，研究数据和凭证只保存在当前设备。' : '登录后通过 ACP 会话完成检索、取证、洞察与报告。'}
+          {setupRequired ? '首次使用时创建本机工作账号，企业画像与调查数据只保存在当前设备。' : '登录后开始检索展会、调查参展企业并生成参展报告。'}
         </p>
         <form onSubmit={submit} className="login-form">
           {setupRequired && <label>

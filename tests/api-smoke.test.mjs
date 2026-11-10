@@ -86,3 +86,29 @@ test('web fetch safety rejects loopback and private network targets', async () =
   assert.equal(await isSafeHttpUrl('http://localhost:8787'), false);
   assert.equal(await isSafeHttpUrl('http://192.168.1.10'), false);
 });
+
+test('exhibition workspace requires a company profile and starts empty', async () => {
+  const login = await fetch(`http://localhost:${port}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'test@example.com', password: 'test-password-123' }) });
+  const { token } = await login.json();
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+
+  const configured = await fetch(`http://localhost:${port}/api/integrations`, { method: 'PUT', headers, body: JSON.stringify({ provider: 'custom', customApi: { protocol: 'openai-completions', baseUrl: 'https://gateway.example.com/v1', model: 'test-model', apiKey: 'sk-custom-test' } }) });
+  assert.equal(configured.status, 200);
+
+  const blocked = await fetch(`http://localhost:${port}/api/discoveries`, { method: 'POST', headers });
+  assert.equal(blocked.status, 400);
+  assert.equal((await blocked.json()).error, 'COMPANY_PROFILE_REQUIRED');
+
+  const empty = await (await fetch(`http://localhost:${port}/api/exhibitions`, { headers })).json();
+  assert.deepEqual(empty, []);
+
+  const missing = await fetch(`http://localhost:${port}/api/exhibitions/exh_missing`, { headers });
+  assert.equal(missing.status, 404);
+
+  const saved = await fetch(`http://localhost:${port}/api/company`, { method: 'PUT', headers, body: JSON.stringify({ name: '测试企业', description: '工业视觉检测设备', industry: '工业自动化', filters: { countries: ['中国'], years: [2027] }, cost: { boothAreaSqm: 18, staffCount: 4, originCity: '苏州' } }) });
+  assert.equal(saved.status, 200);
+  const read = await (await fetch(`http://localhost:${port}/api/company`, { headers })).json();
+  assert.equal(read.profile.name, '测试企业');
+  assert.equal(read.profile.filters.years[0], 2027);
+  assert.equal(read.profile.cost.boothAreaSqm, 18);
+});

@@ -1,58 +1,88 @@
-# Domel Market Intelligence
+# 拾证 · 展会与企业信息助手
 
-一个可运行的市场情报工作台：登录、研究任务、Agent 连续操作列、来源与证据、连续追问、内嵌洞察审核、企业核验入口和 Markdown/PDF 报告导出。
+输入企业名称、官网或主营业务，软件自动寻找相关展会、收集参展企业、判断客户/伙伴/渠道/供应商/竞品关系、估算参展费用，并给出「值不值得参加」的结论与行动清单。
 
-## 启动
+## 功能
+
+- **企业画像**：主营业务、产品、客户、行业、目标市场；筛选条件（国家、年份、行业、规模、目的）；费用参数（出发城市、展位面积、人数、住宿档位）。
+- **展会发现**：多轮检索行业展、专业展、国际展、区域展、采购会、论坛/峰会；按主办方、场馆排期、协会日历、上下游行业等角度补充，跨轮去重，不设固定数量上限（安全上限 120 个）。
+- **参展企业调查**：读取展会官网参展商名录、赞助商与嘉宾页，结合企业官网、新闻与行业网站判断关系：潜在客户、合作伙伴、渠道商、供应商、竞争对手、关系较小；可选接入企查查 MCP 补充工商、股东、关联企业与经营风险。
+- **参展判断**：按「匹配分 + 企业构成」计算综合评分，输出五档结论：建议参加、建议先观展、建议提前联系重点企业、可以参加但需确认、暂不建议参加。
+- **费用估算**：展位、报名、赞助、交通、住宿、人员、运输、宣传、翻译/现场服务；输出单项区间、合计区间，以及参展 / 观展 / 拜访三种方案对比。
+- **报告导出**：单展会 Markdown / PDF / CSV，包含基本情况、推荐理由、企业名单、重点客户/伙伴/竞品、费用、建议接触企业、报名时间与来源。
+- **持续关注**：关注展会并复检，对比展期、报名截止、官网、参展企业名单、公开费用与重点企业动态；超过 7 天未复检会在清单顶部提醒。
+- **对话 Agent（直连）**：顶栏切换到「对话 Agent」，消息原样发送到 DeepSeek Harness ACP，不拼接、不改写用户消息；只用一个独立补丁覆盖自我介绍（persona），展会助手的提示词完全不变。支持多轮上下文与 Harness 自带工具；运行中显示实时步骤，完成后每条回复可展开「执行过程」。
+- **MinerU 文档解析**：Agent 可用 `mineru_parse_url` 把展会手册、参展商名录等 PDF/图片/Office/HTML 解析成 Markdown。在「连接设置」填 MinerU API Token 走标准 API（文件更大、配额更高）；不填则走免登录 Agent API（20 页 / 10MB，队列较慢）。
+- **批量调查**：展会较多时可「调查全部待调查」，逐个自动调查，完成一个进入下一个。
+- **赞助预算**：可在费用参数里填写计划赞助金额，计入总费用。
+
+## 起步
 
 ```bash
 npm install
 npm run dev
 ```
 
-打开 http://localhost:5183。首次启动先创建本机账号，登录后进入右上角“连接设置”选择 DeepSeek 或自定义 API。
+打开 http://localhost:5183，首次使用创建本机账号；登录后在右上角「连接设置」选择 DeepSeek 或自定义 API（Chat Completions / Anthropic Messages / Responses），填写企业画像后即可开始检索。
 
-## DeepSeek Harness + ACP + MCP
+## 数据与隐私
 
-项目已拉取官方 `deepseek-ai/deepseek-harness` 到 `vendor/deepseek-harness`，并执行了其锁定依赖安装。后端通过 ACP stdio 启动 Harness；每次创建 ACP session 时都会自动挂载内置 `playwright` MCP Server，因此 Agent 可以在同一 ACP 会话中打开网页、读取动态正文、点击、填写、等待、分页和提取链接。配置企查查后，它的 Streamable HTTP MCP Server 也会加入同一会话。项目同时拉取了官方 `dsh-mcp-connector` 插件源码到 `vendor/dsh-mcp-connector`。首次安装后需要按官方脚本构建当前平台原生模块：`pnpm --dir vendor/deepseek-harness run build:native-system`。项目隔离的 `data/dsh-home` 已安装 `dsh-mcp-connector` 到 `web` profile；重建时可执行 `DSH_HOME="$PWD/data/dsh-home" pnpm --dir vendor/deepseek-harness dsh plugin --profile web add "$PWD/vendor/dsh-mcp-connector"`。
+- 企业画像、展会、企业与报告数据保存在本机 `data/db.json`（安装版在用户数据目录）。
+- 模型密钥只保存在本机服务端，前端不直连模型、不回显密钥。
+- 未配置模型凭证时，检索请求会明确返回 503 并说明原因；不会生成模拟展会、模拟企业或模拟结论。
+- 企查查 MCP 为可选项；未配置时企业调查只使用公开网页。
 
-运行示例：
+## 检索与判断规则
+
+- **多轮检索**：一次任务最多 3 轮补充检索，直到没有新展会；按名称与官网去重。
+- **深度调查**：默认自动调查匹配度最高的 3 个展会；其余可在列表中单独调查，或用「调查全部待调查」批量处理。
+- **综合评分**：`0.5 × 匹配分 + 3 × 潜在客户数（上限 10 家）+ 2.5 × 伙伴/渠道数（上限 4 家）− 0.5 × 竞品数（上限 10 家）`。
+- **费用**：能找到公开展位价时优先使用，其余按国内/海外行业区间与住宿档位估算，统一折算人民币；全部标注「估算」，不是主办方报价。
+
+## 技术结构
+
+- 前端：React + Vite（`src/`），本机工作区、展会清单、详情、报告导出，以及直连 Harness 的对话页。
+- 服务端：Express + tsx（`server/`），本机账号、企业画像、发现任务、调查流水线、报告生成。
+- Agent：通过 ACP stdio 启动内置 DeepSeek Harness，每个会话自动挂载 Playwright MCP（含 MinerU 文档解析工具）；动态页面用 `browser_open` / `browser_read` / `browser_paginate` 等工具抓取；图片/画布页面用 `browser_ocr` 截图识别，`browser_screenshot` 可留证；服务端保留最终来源的回退抓取。
+- 企查查：配置 `QCC_MCP_API_KEY` 后自动挂载官方 10 个 Streamable HTTP MCP Server。
+
+## 测试
 
 ```bash
-npm run dev
-# 浏览器中登录 → 连接设置 → 选择 DeepSeek 或自定义 API → 保存
+npm test
 ```
 
-连接设置支持 Chat Completions、Anthropic Messages 和 Responses 协议。自定义 API 的 Base URL、模型和密钥会保存到本机服务端，并由 DeepSeek Harness ACP 进程使用。
+包含接口冒烟测试（账号、连接设置、企业画像、空工作区）与领域单测（JSON 契约、角色映射、评分、费用、变化对比、报告结构）。
 
-企查查官方接入指南提供 10 个 HTTP Server（企业、风控、知产、经营、历史、董监高、法规、司法、标讯、文档），设置 `QCC_MCP_API_KEY` 后，后端会自动生成这些端点并以 Bearer Token 连接。DeepSeek Harness 自己的模型凭证在 `DSH_HOME` 内按官方方式配置。缺少 Harness 或企查查 MCP 配置时，接口会明确报错，不会生成模拟来源、模拟进度或模拟洞察。
+## 构建与分发
 
-Agent 会优先使用普通网页来源，遇到 JavaScript 渲染、访问拦截、分页或正文不完整时，可以直接调用同一 ACP 会话内的 `playwright` MCP 工具。服务端还保留最终来源的 Playwright 回退读取，避免 Agent 没有返回完整 URL 时丢失动态正文。桌面安装包内含 Chromium，构建脚本会自动准备浏览器资源。
-
-## Docker
-
-```bash
-docker compose up --build
-```
-
-## 真实验收边界
-
-官方 Harness 已下载并可启动 ACP 服务；真实研究需要在前端“连接设置”中完成模型配置。企查查企业核验是可选能力，启用时通过环境变量配置 QCC MCP。未配置模型授权前，研究请求会被阻止并显示原因。
-
-## 桌面分发
-
-构建可直接安装的 Linux 包：
+Linux（AppImage + deb）：
 
 ```bash
 npm run dist:desktop
 ```
 
+Windows（NSIS 安装包，可在 Linux 上交叉构建）：
+
+```bash
+npm run dist:win
+```
+
+Windows 交叉构建会下载 Windows x64 Node 运行时与 Playwright Chromium；应用首次启动会在用户数据目录准备 Harness 运行副本并安装锁定依赖（需要网络）。
+
+## 桌面分发
+
 产物位于 `release/`：
 
-- `shizheng-intel-desk-0.1.0-linux-x86_64.AppImage`：双击或直接运行即可使用。
-- `shizheng-intel-desk-0.1.0-linux-amd64.deb`：在 Debian/Ubuntu 系统中点击安装。
+- `shizheng-intel-desk-0.1.0-linux-x86_64.AppImage`
+- `shizheng-intel-desk-0.1.0-linux-amd64.deb`
 
-应用首次打开后创建本机账号，在右上角“连接设置”选择模型连接方式。研究请求只通过内置 DeepSeek Harness 的 ACP stdio 会话执行；应用首次启动会把 Harness 运行文件复制到用户数据目录，并自动安装锁定依赖。密钥保存在本机应用数据目录，前端不会直连模型服务。
+Windows 安装包在 Windows 主机上执行 `npm run dist:win` 生成；Linux 上交叉构建可以得到 `release/win-unpacked`，NSIS 安装包建议在 Windows 上完成。
 
-Windows/macOS 安装包可在对应系统上运行同一条 `npm run dist:desktop` 生成（electron-builder 会按宿主系统选择 NSIS 或 DMG 目标）。
+应用首次打开后创建本机账号，在右上角「连接设置」配置模型；研究请求只通过内置 DeepSeek Harness 的 ACP 会话执行，前端不会直连模型服务。
 
-桌面构建要求 Node 24.9+。构建脚本会把当前 Node 运行时和 pnpm 一并放入安装包；Windows 用户首次启动时不需要另装 Node，应用会使用内置 `node.exe` 启动 ACP 并自动安装 Harness 依赖。
+## 边界
+
+- 展会官网可能限制抓取或把名录放在登录后；取不到时会明确显示「未获取」，不会编造企业或价格。
+- 费用为估算区间，实际以主办方报价为准。
+- 企查查需要单独授权；没有授权时跳过工商核验。

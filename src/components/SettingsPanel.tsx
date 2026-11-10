@@ -13,6 +13,11 @@ export function SettingsPanel({ open, onClose }: Props) {
   const [customApiKey, setCustomApiKey] = useState('')
   const [customConfigured, setCustomConfigured] = useState(false)
   const [configured, setConfigured] = useState(false)
+  const [qccKey, setQccKey] = useState('')
+  const [qccServers, setQccServers] = useState('')
+  const [qccConfigured, setQccConfigured] = useState(false)
+  const [mineruKey, setMineruKey] = useState('')
+  const [mineruConfigured, setMineruConfigured] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -28,6 +33,8 @@ export function SettingsPanel({ open, onClose }: Props) {
         setProvider(payload.acp?.provider === 'custom' ? 'custom' : 'deepseek')
         setConfigured(Boolean(payload.acp?.configured && payload.acp?.provider !== 'custom'))
         setCustomConfigured(Boolean(payload.customApi?.configured))
+        setQccConfigured(Boolean(payload.qccMcp?.configured))
+        setMineruConfigured(Boolean(payload.mineru?.configured))
         if (payload.customApi?.protocol) setCustomProtocol(payload.customApi.protocol)
         if (payload.customApi?.baseUrl) setCustomBaseUrl(payload.customApi.baseUrl)
         if (payload.customApi?.model) setCustomModel(payload.customApi.model)
@@ -48,16 +55,25 @@ export function SettingsPanel({ open, onClose }: Props) {
       const response = await fetch('/api/integrations', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('domel_token') || ''}` },
-        body: JSON.stringify(provider === 'deepseek'
-          ? { provider, deepseekApiKey: apiKey.trim() }
-          : { provider, customApi: { protocol: customProtocol, baseUrl: customBaseUrl.trim(), model: customModel.trim(), apiKey: customApiKey.trim() } }),
+        body: JSON.stringify({
+          ...(provider === 'deepseek'
+            ? { provider, deepseekApiKey: apiKey.trim() }
+            : { provider, customApi: { protocol: customProtocol, baseUrl: customBaseUrl.trim(), model: customModel.trim(), apiKey: customApiKey.trim() } }),
+          ...(qccKey.trim() ? { qccApiKey: qccKey.trim() } : {}),
+          ...(mineruKey.trim() ? { mineruApiKey: mineruKey.trim() } : {}),
+          ...(qccServers.trim() ? { qccServers: qccServers.trim() } : {}),
+        }),
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.message || '保存 ACP 配置失败')
       setConfigured(provider === 'deepseek')
       setCustomConfigured(provider === 'custom')
+      if (qccKey.trim() || qccServers.trim()) setQccConfigured(true)
+      if (mineruKey.trim()) setMineruConfigured(true)
       setApiKey('')
-      setMessage('已保存。研究任务将通过内置 DeepSeek Harness ACP 执行。')
+      setQccKey('')
+      setQccServers('')
+      setMessage('已保存。展会检索与调查将通过内置 DeepSeek Harness ACP 执行。')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '保存 ACP 配置失败')
     } finally {
@@ -83,6 +99,14 @@ export function SettingsPanel({ open, onClose }: Props) {
             <label className="settings-field">模型名称<input value={customModel} onChange={(event) => setCustomModel(event.target.value)} type="text" placeholder="model-name" /></label>
             <label className="settings-field">API Key<input value={customApiKey} onChange={(event) => setCustomApiKey(event.target.value)} type="password" autoComplete="off" /></label>
           </>}
+          <div className="settings-divider"><span className="mono">企查查 MCP（可选）</span><span className="settings-field__configured">{qccConfigured ? '已配置' : '未配置'}</span></div>
+          <label className="settings-field">企查查 API Key<input value={qccKey} onChange={(event) => setQccKey(event.target.value)} type="password" autoComplete="off" placeholder={qccConfigured ? '已保存，留空则不修改' : '填写后启用企业工商核验'} /></label>
+          <label className="settings-field">自定义 MCP Server（可选，JSON）<textarea value={qccServers} onChange={(event) => setQccServers(event.target.value)} rows={3} placeholder='{"qcc-company":{"url":"https://agent.qcc.com/mcp/company/stream"}}' /></label>
+          <p className="settings-panel__hint">配置后，调查参展企业时可对单家企业发起企查查核验；未配置则只使用公开网页。</p>
+
+          <div className="settings-divider"><span className="mono">MinerU 文档解析（可选）</span><span className="settings-field__configured">{mineruConfigured ? '已配置' : '免登录模式'}</span></div>
+          <label className="settings-field">MinerU API Token<input value={mineruKey} onChange={(event) => setMineruKey(event.target.value)} type="password" autoComplete="off" placeholder={mineruConfigured ? '已保存，留空则不修改' : '可留空，使用免登录 Agent API'} /></label>
+          <p className="settings-panel__hint">用于把展会手册、参展商名录 PDF/图片解析成 Markdown；配置 Token 走标准 API（更大文件/更高配额），不填则走免登录 Agent API。</p>
           {error && <p className="settings-message settings-message--error" role="alert">{error}</p>}
           {message && <p className="settings-message settings-message--ok">{message}</p>}
           <button type="button" className="btn btn--primary settings-save" onClick={() => void save()} disabled={busy || (provider === 'deepseek' ? !apiKey.trim() && !configured : (!customBaseUrl.trim() || !customModel.trim() || !customApiKey.trim() && !customConfigured))}>{busy ? '保存中…' : '保存 ACP 配置'}</button>

@@ -9,44 +9,49 @@
     "dev:client": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "start": "concurrently -k \"npm:serve:server\" \"npm:serve:client\"",
-    "test": "node --test tests/api-smoke.test.mjs",
+    "test": "node --test tests/api-smoke.test.mjs && node --import tsx --test tests/exhibition.test.ts",
     "test:ui": "playwright test",
     "serve:server": "tsx server/index.ts",
     "serve:client": "vite preview --host 0.0.0.0 --port 5173",
     "build:server": "node scripts/build-server.mjs",
     "desktop:dev": "node scripts/stage-node-runtime.mjs && npm run build && npm run build:server && electron electron/main.cjs",
-    "dist:desktop": "node scripts/stage-node-runtime.mjs && npm run build && npm run build:server && electron-builder"
+    "dist:desktop": "node scripts/stage-node-runtime.mjs && npm run build && npm run build:server && electron-builder",
+    "dist:win": "node scripts/stage-node-runtime.mjs --platform=win && npm run build && npm run build:server && electron-builder --win nsis --x64"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.6",
     "@fontsource/source-serif-4": "^5.2.8",
-    "@vitejs/plugin-react": "latest",
-    "concurrently": "latest",
     "cors": "latest",
     "dotenv": "^18.0.10",
     "express": "latest",
+    "fflate": "^0.8.3",
     "lucide-react": "latest",
     "pdfkit": "^0.20.2",
     "playwright": "^1.65.0",
-    "pnpm": "^11.28.5",
     "react": "latest",
-    "react-dom": "latest",
-    "tsx": "latest",
-    "vite": "latest"
+    "react-dom": "latest"
   },
   "devDependencies": {
     "@playwright/test": "latest",
+    "@tesseract.js-data/chi_sim": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "latest",
     "@types/node": "latest",
     "@types/pdfkit": "^0.17.7",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
     "electron": "^38.0.0",
     "electron-builder": "^26.0.0",
     "esbuild": "^0.25.0",
+    "pnpm": "^11.28.5",
+    "tesseract.js": "^7.0.0",
+    "tsx": "latest",
     "typescript": "latest",
+    "vite": "latest",
     "vitest": "latest"
   },
   "build": {
@@ -113,11 +118,19 @@
           "!benchmarks{,/**/*}",
           "!snapshots{,/**/*}"
         ]
+      },
+      {
+        "from": "assets/fonts",
+        "to": "fonts"
+      },
+      {
+        "from": "build/ocr-data",
+        "to": "ocr-data"
       }
     ]
   },
   "main": "electron/main.cjs",
-  "description": "拾证 · 市场情报工作台",
+  "description": "拾证 · 展会与企业信息助手",
   "author": {
     "name": "Domel",
     "email": "support@domel.com"

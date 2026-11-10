@@ -35,6 +35,12 @@ async function prepareHarness() {
   const runtime = app.isPackaged ? join(userData, 'harness-runtime') : bundledSource
   const bundledNode = join(process.resourcesPath, 'node-runtime', process.platform === 'win32' ? 'node.exe' : 'node')
   const nodeCommand = app.isPackaged && fs.existsSync(bundledNode) ? bundledNode : (process.env.DEEPSEEK_NODE_COMMAND || 'node')
+  if (app.isPackaged) {
+    process.env.SHIZHENG_REPORT_FONT = join(process.resourcesPath, 'fonts', 'NotoSansCJK-Regular.ttc')
+    process.env.SHIZHENG_OCR_LANG_PATH = join(process.resourcesPath, 'ocr-data')
+    process.env.SHIZHENG_SCREENSHOT_DIR = join(userData, 'screenshots')
+    process.env.SHIZHENG_OCR_CACHE_DIR = join(userData, 'ocr-cache')
+  }
   process.env.PLAYWRIGHT_BROWSERS_PATH = app.isPackaged ? join(process.resourcesPath, 'playwright-browsers') : join(__dirname, '..', 'build', 'playwright-browsers')
   process.env.PLAYWRIGHT_MCP_SCRIPT = app.isPackaged ? join(process.resourcesPath, 'playwright-runtime', 'playwright-mcp.mjs') : join(__dirname, '..', 'server', 'playwright-mcp.mjs')
   if (app.isPackaged && !fs.existsSync(join(runtime, 'package.json'))) {
@@ -60,7 +66,7 @@ async function createWindow() {
     minWidth: 980,
     minHeight: 680,
     backgroundColor: '#f4f7f8',
-    title: '拾证 · 市场情报工作台',
+    title: '拾证 · 展会与企业信息助手',
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   })
   await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent('<body style="font:16px system-ui;padding:40px;color:#17323d"><h2>正在准备 DeepSeek Harness ACP</h2><p>首次启动会自动安装运行依赖，请保持网络连接。</p></body>')}`)

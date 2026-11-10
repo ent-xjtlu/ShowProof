@@ -9,6 +9,30 @@ import { fileURLToPath } from 'node:url';
 import PDFDocument from 'pdfkit';
 import { fetchPageWithFallback, type PageFetchResult } from './playwrightFetcher.js';
 import { normalizeCustomApi, type CustomApiSettings, writeCustomProviderPatch } from './customProvider.js';
+import {
+  DEFAULT_COST,
+  buildDiscoveryPrompt,
+  buildDetailPrompt,
+  buildExhibitionReport,
+  computeCounts,
+  deriveVerdict,
+  diffExhibition,
+  estimateCosts,
+  extractJsonObject,
+  normalizeDetailPayload,
+  normalizeDiscoveryPayload,
+  scoreExhibition,
+  ROLE_LABELS,
+  VERDICT_LABELS,
+  type CompanyProfile,
+  type CostEstimate,
+  type DiscoveredExhibition,
+  type Discovery,
+  type Exhibitor,
+  type Exhibition,
+  type PublicFee,
+  type SearchFilters,
+} from './exhibition.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -28,19 +52,52 @@ type IntegrationSettings = {
   customApi?: CustomApiSettings;
   qccApiKey?: string;
   qccServers?: string;
+  mineruApiKey?: string;
   updatedAt?: string;
 };
-type Db = { users: User[]; sessions: Record<string, string>; researches: Research[]; settings: Record<string, IntegrationSettings>; };
+type ChatEntry = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  at: string;
+  trace?: { label: string; detail?: string; at: string }[];
+};
+type ChatSession = {
+  id: string;
+  userId: string;
+  title: string;
+  messages: ChatEntry[];
+  activity: { label: string; detail?: string; at: string; status: 'running' | 'completed' | 'failed' }[];
+  status: 'idle' | 'running' | 'failed';
+  error?: string;
+  harnessSessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+type Db = {
+  users: User[];
+  sessions: Record<string, string>;
+  researches: Research[];
+  settings: Record<string, IntegrationSettings>;
+  companies: CompanyProfile[];
+  discoveries: Discovery[];
+  exhibitions: Exhibition[];
+  chats: ChatSession[];
+};
 
 function readDb(): Db {
   if (!fs.existsSync(dbPath)) {
-    const initial: Db = { users: [], sessions: {}, researches: [], settings: {} };
+    const initial: Db = { users: [], sessions: {}, researches: [], settings: {}, companies: [], discoveries: [], exhibitions: [], chats: [] };
     fs.writeFileSync(dbPath, JSON.stringify(initial, null, 2));
     return initial;
   }
   const loaded = JSON.parse(fs.readFileSync(dbPath, 'utf8')) as Partial<Db>;
   loaded.settings ||= {};
   loaded.researches ||= [];
+  loaded.companies ||= [];
+  loaded.discoveries ||= [];
+  loaded.exhibitions ||= [];
+  loaded.chats ||= [];
   loaded.researches.forEach((research) => {
     research.messages ||= [];
     const finalAssistant = [...research.messages].reverse().find((message) => message.role === 'assistant' && message.status === 'completed' && message.text?.trim());
@@ -56,9 +113,50 @@ function readDb(): Db {
 function writeDb(db: Db) { fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), { mode: 0o600 }); try { fs.chmodSync(dbPath, 0o600); } catch { /* best effort on non-POSIX filesystems */ } }
 let db = readDb();
 const now = () => new Date().toISOString();
+
+// 进程重启后，遗留的 running/researching 状态没有执行者，标记为中断以免界面永久转圈。
+{
+  let recovered = false;
+  for (const discovery of db.discoveries) {
+    if (discovery.status !== 'running') continue;
+    discovery.status = 'failed';
+    discovery.error = '应用已重启，任务中断，请重新发起检索。';
+    discovery.stage = '已中断';
+    discovery.activity.push({ label: '应用重启，任务中断', at: now(), status: 'failed' });
+    discovery.updatedAt = now();
+    recovered = true;
+  }
+  for (const chat of db.chats) {
+    if (chat.status !== 'running') continue;
+    chat.status = 'failed';
+    chat.error = '应用已重启，对话中断，请重新发送。';
+    chat.updatedAt = now();
+    recovered = true;
+  }
+  for (const exhibition of db.exhibitions) {
+    if (exhibition.status !== 'researching') continue;
+    exhibition.status = 'queued';
+    exhibition.error = '上次调查被中断，请重新点「调查参展企业」。';
+    exhibition.updatedAt = now();
+    recovered = true;
+  }
+  if (recovered) writeDb(db);
+}
 const id = (prefix: string) => `${prefix}_${crypto.randomBytes(5).toString('hex')}`;
 const redactedEnv = (value?: string) => value ? 'configured' : 'missing';
 const activeBridges = new Map<string, DeepSeekAcpBridge>();
+const CHAT_PERSONA_PATCH = path.join(dataDir, 'chat-persona.patch.yml');
+const CHAT_PERSONA = [
+  '- id: system-prompt',
+  '  config:',
+  '    personaPrefix: >-',
+  '      You are 拾证（Shizheng）, a Chinese-first AI assistant powered by the {{model}} model.',
+  '',
+].join('\n');
+function ensureChatPersonaPatch(): string {
+  fs.writeFileSync(CHAT_PERSONA_PATCH, CHAT_PERSONA, { mode: 0o600 });
+  return CHAT_PERSONA_PATCH;
+}
 function normalizeSecret(value?: string) {
   return value?.trim().replace(/^['"`]+|['"`]+$/g, '').replace(/^Bearer\s+/i, '').replace(/^\s*(?:DEEPSEEK_API_KEY|QCC_MCP_API_KEY)\s*=\s*/i, '').replace(/\s+/g, '');
 }
@@ -102,11 +200,12 @@ function validateAccountInput(body: any) {
 function getIntegrationSettings(userId: string): IntegrationSettings {
   const stored = db.settings[userId] || {};
   return {
-    provider: stored.provider === 'custom' || stored.customApi ? 'custom' : 'deepseek',
+    provider: stored.provider ? stored.provider : stored.customApi ? 'custom' : 'deepseek',
     deepseekApiKey: normalizeDeepSeekKey(stored.deepseekApiKey || process.env.DEEPSEEK_API_KEY),
     customApi: normalizeCustomApi(stored.customApi),
     qccApiKey: normalizeSecret(stored.qccApiKey || process.env.QCC_MCP_API_KEY),
     qccServers: stored.qccServers || process.env.QCC_MCP_SERVERS,
+    mineruApiKey: normalizeSecret(stored.mineruApiKey || process.env.MINERU_API_TOKEN),
     updatedAt: stored.updatedAt,
   };
 }
@@ -140,7 +239,7 @@ class DeepSeekAcpBridge {
   private listeners: ((msg: RpcMessage) => void)[] = [];
   private initialized = false;
 
-  constructor(private cwd: string, private userId: string) {}
+  constructor(private cwd: string, private userId: string, private variant: 'exhibition' | 'chat' = 'exhibition') {}
 
   private getCommand(settings: IntegrationSettings) {
     const command = process.env.DEEPSEEK_HARNESS_COMMAND || process.execPath;
@@ -151,6 +250,7 @@ class DeepSeekAcpBridge {
     if (settings.provider === 'custom' && settings.customApi) {
       args.push('--patch', writeCustomProviderPatch(dataDir, this.userId, settings.customApi));
     }
+    if (this.variant === 'chat') args.push('--patch', ensureChatPersonaPatch());
     return { command, args };
   }
 
@@ -220,6 +320,34 @@ class DeepSeekAcpBridge {
       .filter(Boolean);
     return { sessionId: session.sessionId, finalText: textParts.join('\n').trim() || prompt?.text || '', updates };
   }
+  /** 直连对话：不拼接任何提示词，原样把用户消息发给 Harness。 */
+  async runChat(existingSessionId: string | undefined, text: string, onUpdate?: (message: RpcMessage) => void): Promise<{ sessionId: string; finalText: string; updates: RpcMessage[] }> {
+    if (!this.initialized) {
+      await this.request('initialize', { protocolVersion: 1, clientInfo: { name: 'domel-market-intelligence', version: '0.1.0' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
+      this.initialized = true;
+    }
+    let sessionId = existingSessionId;
+    if (!sessionId) {
+      const session = await this.request('session/new', { cwd: this.cwd, mcpServers: [] });
+      sessionId = String(session.sessionId);
+    }
+    const updates: RpcMessage[] = [];
+    const listener = (message: RpcMessage) => {
+      if (message.method === 'session/update') {
+        updates.push(message);
+        onUpdate?.(message);
+      }
+    };
+    this.onNotification(listener);
+    const prompt = await this.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+    this.listeners = this.listeners.filter((item) => item !== listener);
+    const textParts = updates
+      .map((update) => ({ update, summary: summarizeAcpUpdate(update) }))
+      .filter(({ summary }) => summary.label === 'Agent 回复')
+      .map(({ update, summary }) => textFromAcpContent(update.params?.update?.content ?? update.params?.content) || summary.text)
+      .filter(Boolean);
+    return { sessionId, finalText: textParts.join('\n').trim() || prompt?.text || '', updates };
+  }
   close() { this.child?.stdin.end(); this.child?.kill('SIGTERM'); this.child = undefined; }
 }
 
@@ -265,7 +393,21 @@ function buildMcpServers(settings?: IntegrationSettings) {
   const playwrightCommand = process.env.DEEPSEEK_HARNESS_COMMAND || process.execPath;
   const playwrightScript = process.env.PLAYWRIGHT_MCP_SCRIPT || path.join(rootDir, 'server/playwright-mcp.mjs');
   const playwrightBrowserPath = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(rootDir, 'build/playwright-browsers');
-  const servers: any[] = [{ name: 'playwright', command: playwrightCommand, args: [playwrightScript], env: [{ name: 'PLAYWRIGHT_BROWSERS_PATH', value: playwrightBrowserPath }] }];
+  const ocrLangPath = process.env.SHIZHENG_OCR_LANG_PATH || path.join(rootDir, 'build/ocr-data');
+  const screenshotDir = process.env.SHIZHENG_SCREENSHOT_DIR || path.join(dataDir, 'screenshots');
+  const ocrCacheDir = process.env.SHIZHENG_OCR_CACHE_DIR || path.join(dataDir, 'ocr-cache');
+  const servers: any[] = [{
+    name: 'playwright',
+    command: playwrightCommand,
+    args: [playwrightScript],
+    env: [
+      { name: 'PLAYWRIGHT_BROWSERS_PATH', value: playwrightBrowserPath },
+      { name: 'SHIZHENG_OCR_LANG_PATH', value: ocrLangPath },
+      { name: 'SHIZHENG_OCR_CACHE_DIR', value: ocrCacheDir },
+      { name: 'SHIZHENG_SCREENSHOT_DIR', value: screenshotDir },
+      ...(settings?.mineruApiKey || process.env.MINERU_API_TOKEN ? [{ name: 'MINERU_API_TOKEN', value: settings?.mineruApiKey || process.env.MINERU_API_TOKEN || '' }] : []),
+    ],
+  }];
   const command = process.env.QCC_MCP_COMMAND;
   const args = process.env.QCC_MCP_ARGS ? JSON.parse(process.env.QCC_MCP_ARGS) as string[] : [];
   const url = process.env.QCC_MCP_URL;
@@ -404,6 +546,7 @@ app.get('/api/integrations', requireUser, (req, res) => {
     acp: { configured: settings.provider === 'custom' ? Boolean(settings.customApi) : Boolean(settings.deepseekApiKey), provider: settings.provider, mode: settings.provider === 'custom' ? 'custom API through DeepSeek Harness ACP' : 'bundled DeepSeek Harness ACP' },
     customApi: settings.customApi ? { configured: true, protocol: settings.customApi.protocol, baseUrl: settings.customApi.baseUrl, model: settings.customApi.model } : { configured: false },
     qccMcp: { configured: Boolean(settings.qccApiKey || settings.qccServers || process.env.QCC_MCP_URL || process.env.QCC_MCP_COMMAND), mode: settings.qccServers ? 'custom MCP servers' : 'QCC Streamable HTTP' },
+    mineru: { configured: Boolean(settings.mineruApiKey), mode: 'MinerU document parsing' },
     updatedAt: settings.updatedAt || null,
   });
 });
@@ -418,6 +561,7 @@ app.put('/api/integrations', requireUser, (req, res) => {
   if (provider === 'custom' && !customApi) return res.status(400).json({ error: 'INVALID_CUSTOM_API', message: '自定义 API 配置必须包含有效协议、HTTP(S) 地址、模型和 API Key。' });
   const qccApiKey = normalizeSecret(typeof req.body?.qccApiKey === 'string' ? req.body.qccApiKey : '');
   const qccServers = typeof req.body?.qccServers === 'string' ? req.body.qccServers.trim() : '';
+  const mineruApiKey = normalizeSecret(typeof req.body?.mineruApiKey === 'string' ? req.body.mineruApiKey : '');
   if (qccServers) {
     try { const parsed = JSON.parse(qccServers); if (!parsed || typeof parsed !== 'object') throw new Error('invalid'); }
     catch { return res.status(400).json({ error: 'INVALID_QCC_SERVERS', message: '企查查 MCP Server 配置必须是有效 JSON。' }); }
@@ -429,6 +573,7 @@ app.put('/api/integrations', requireUser, (req, res) => {
     ...(customApi ? { customApi } : {}),
     qccApiKey: qccApiKey || previous.qccApiKey,
     qccServers: qccServers || previous.qccServers,
+    mineruApiKey: mineruApiKey || previous.mineruApiKey,
     updatedAt: now(),
   };
   writeDb(db);
@@ -451,8 +596,7 @@ app.get('/api/research/:id/report.pdf', requireUser, (req, res) => {
   const accepted = research.insights.filter((insight) => insight.review === 'accepted');
   if (!accepted.length) return res.status(409).json({ error: 'NO_ACCEPTED_INSIGHTS', message: '至少接受一条洞察后才能生成报告。' });
   const doc = new PDFDocument({ size: 'A4', margin: 52 });
-  const fontPath = process.env.PDF_FONT_PATH;
-  if (fontPath && fs.existsSync(fontPath)) doc.font(fontPath);
+  applyReportFont(doc);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename=\"${research.id}.pdf\"`);
   doc.pipe(res);
@@ -504,6 +648,813 @@ app.get('/api/research/:id/report.csv', requireUser, (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="${research.id}-evidence.csv"`);
   res.send(`\uFEFF${csv}\r\n`);
 });
+/* ==========================================================================
+   展会与企业信息助手
+   ========================================================================== */
+
+const REPORT_FONT = path.join(rootDir, 'assets/fonts/NotoSansCJK-Regular.ttc');
+const REPORT_FONT_FAMILY = 'NotoSansCJKsc-Regular';
+type PdfDoc = InstanceType<typeof PDFDocument>;
+
+function applyReportFont(doc: PdfDoc) {
+  const packaged = process.env.SHIZHENG_REPORT_FONT;
+  if (packaged && fs.existsSync(packaged)) {
+    doc.font(packaged, REPORT_FONT_FAMILY);
+    return;
+  }
+  const custom = process.env.PDF_FONT_PATH;
+  if (custom && fs.existsSync(custom)) {
+    doc.font(custom);
+    return;
+  }
+  if (fs.existsSync(REPORT_FONT)) doc.font(REPORT_FONT, REPORT_FONT_FAMILY);
+}
+
+let lastFlush = 0;
+function flushDb(force = false) {
+  const stamp = Date.now();
+  if (!force && stamp - lastFlush < 700) return;
+  lastFlush = stamp;
+  writeDb(db);
+}
+
+const asText = (value: unknown, max = 240) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+const asList = (value: unknown, max = 24): string[] => {
+  const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[,，、\n]/) : [];
+  return list.map((item) => asText(item, 60)).filter(Boolean).slice(0, max);
+};
+const clampNumber = (value: unknown, min: number, max: number, fallback: number) => {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed * 100) / 100)) : fallback;
+};
+
+const companyProfileOf = (userId: string) => db.companies.find((item) => item.userId === userId);
+
+/** 读取时按当前企业画像重算费用，改了展位面积/人数/住宿档位后立即生效。 */
+function refreshCost(exhibition: Exhibition): Exhibition {
+  const profile = companyProfileOf(exhibition.userId);
+  if (profile) exhibition.cost = estimateCosts(profile, exhibition);
+  return exhibition;
+}
+
+function profileFromBody(userId: string, body: any, existing?: CompanyProfile): CompanyProfile {
+  const name = asText(body?.name, 80);
+  const description = asText(body?.description, 1200);
+  const website = asText(body?.website, 300);
+  if (!name) throw new ApcError('COMPANY_NAME_REQUIRED', '请填写企业名称。');
+  if (!description && !website) throw new ApcError('COMPANY_BASIS_REQUIRED', '请至少填写主营业务或官网。');
+  const filtersInput = body?.filters && typeof body.filters === 'object' ? body.filters : {};
+  const filters: SearchFilters = {
+    countries: asList(filtersInput.countries, 8),
+    years: (Array.isArray(filtersInput.years) ? filtersInput.years : [])
+      .map((year: unknown) => Number.parseInt(String(year), 10))
+      .filter((year: number) => Number.isFinite(year) && year >= 2000 && year <= 2100)
+      .slice(0, 6),
+    industries: asList(filtersInput.industries, 8),
+    scale: ['any', 'large', 'international'].includes(filtersInput.scale) ? filtersInput.scale : 'any',
+    purpose: ['any', 'customers', 'partners'].includes(filtersInput.purpose) ? filtersInput.purpose : 'any',
+    note: asText(filtersInput.note, 300) || undefined,
+  };
+  const costInput = body?.cost && typeof body.cost === 'object' ? body.cost : {};
+  const timestamp = now();
+  return {
+    id: existing?.id ?? id('cmp'),
+    userId,
+    name,
+    website: website || undefined,
+    description,
+    products: asList(body?.products),
+    customers: asList(body?.customers),
+    industry: asText(body?.industry, 80),
+    targetMarkets: asList(body?.targetMarkets),
+    filters,
+    cost: {
+      boothAreaSqm: clampNumber(costInput.boothAreaSqm, 6, 500, existing?.cost.boothAreaSqm ?? DEFAULT_COST.boothAreaSqm),
+      staffCount: clampNumber(costInput.staffCount, 1, 60, existing?.cost.staffCount ?? DEFAULT_COST.staffCount),
+      days: clampNumber(costInput.days, 1, 14, existing?.cost.days ?? DEFAULT_COST.days),
+      originCity: 'originCity' in costInput ? asText(costInput.originCity, 40) : existing?.cost.originCity || '',
+      hotelTier: (['economy', 'standard', 'premium'].includes(costInput.hotelTier) ? costInput.hotelTier : existing?.cost.hotelTier ?? 'standard') as CompanyProfile['cost']['hotelTier'],
+      sponsorshipBudget: clampNumber(costInput.sponsorshipBudget, 0, 10_000_000, existing?.cost.sponsorshipBudget ?? 0),
+    },
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function getDiscovery(req: Request, res: Response) {
+  const user = (req as Request & { user: User }).user;
+  const discovery = db.discoveries.find((item) => item.id === req.params.id && item.userId === user.id);
+  if (!discovery) { res.status(404).json({ error: 'NOT_FOUND', message: '发现任务不存在或无权访问。' }); return; }
+  return discovery;
+}
+function getExhibition(req: Request, res: Response) {
+  const user = (req as Request & { user: User }).user;
+  const exhibition = db.exhibitions.find((item) => item.id === req.params.id && item.userId === user.id);
+  if (!exhibition) { res.status(404).json({ error: 'NOT_FOUND', message: '展会不存在或无权访问。' }); return; }
+  return exhibition;
+}
+
+function trimActivity(discovery: Discovery) {
+  if (discovery.activity.length > 120) discovery.activity.splice(0, discovery.activity.length - 120);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ApcError('AGENT_TIMEOUT', message)), ms);
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
+async function collectSources(items: Array<{ title: string; url: string; excerpt?: string }>, type: string): Promise<Exhibition['sources']> {
+  const seen = new Set<string>();
+  const unique = items.filter((item) => {
+    if (!/^https?:\/\//i.test(item.url) || seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  }).slice(0, 4);
+  const sources: Exhibition['sources'] = [];
+  for (const item of unique) {
+    const page = await fetchPageWithFallback(item.url).catch(() => ({ text: '', title: '', finalUrl: item.url, method: 'failed' as const }));
+    sources.push({
+      id: id('ev'),
+      title: (page.title || item.title || item.url).slice(0, 120),
+      url: page.finalUrl || item.url,
+      type: page.method === 'failed' ? type : `${type}-${page.method}`,
+      capturedAt: now(),
+      excerpt: (page.text || item.excerpt || '').slice(0, 400),
+      status: page.method === 'failed' ? 'pending' : 'verified',
+    });
+  }
+  return sources;
+}
+
+function verdictReasonFromCounts(exhibition: Exhibition): string {
+  if (!exhibition.counts.total) return exhibition.verdictReason || '尚未取得可识别的参展企业名单，建议补齐后再判断。';
+  return `已识别 ${exhibition.counts.total} 家参展企业：潜在客户 ${exhibition.counts.customer} 家、合作伙伴 ${exhibition.counts.partner} 家、渠道商 ${exhibition.counts.channel} 家、供应商 ${exhibition.counts.supplier} 家、竞争对手 ${exhibition.counts.competitor} 家。${exhibition.verdictReason || ''}`.trim();
+}
+
+function exhibitionKey(item: { name: string; website?: string }): string {
+  const name = item.name.toLowerCase().replace(/[\s·・()（）\[\]【】\-—_/]+/g, '');
+  let host = '';
+  if (item.website) {
+    try { host = new URL(item.website).hostname.replace(/^www\./i, ''); } catch { host = ''; }
+  }
+  return `${name}|${host}`;
+}
+
+function createExhibitionRecord(discovery: Discovery, profile: CompanyProfile, item: DiscoveredExhibition): Exhibition {
+  const counts = computeCounts([]);
+  const score = scoreExhibition(item.fitScore, counts);
+  const sources: Exhibition['sources'] = item.sources.slice(0, 6).map((source) => ({
+    id: id('ev'),
+    title: (source.title || source.url).slice(0, 120),
+    url: source.url,
+    type: 'web',
+    capturedAt: now(),
+    excerpt: (source.excerpt || '').slice(0, 400),
+    status: 'pending' as const,
+  }));
+  return {
+    id: id('exh'),
+    userId: discovery.userId,
+    discoveryId: discovery.id,
+    status: 'queued',
+    name: item.name,
+    type: item.type,
+    startDate: item.startDate,
+    endDate: item.endDate,
+    city: item.city,
+    country: item.country,
+    venue: item.venue,
+    organizer: item.organizer,
+    theme: item.theme,
+    exhibitScope: item.exhibitScope,
+    participation: item.participation,
+    registrationDeadline: item.registrationDeadline,
+    website: item.website,
+    fitScore: item.fitScore,
+    fitReasons: item.fitReasons,
+    mismatchReasons: item.mismatchReasons,
+    exhibitors: [],
+    counts,
+    score,
+    verdict: deriveVerdict(score, counts),
+    verdictReason: '',
+    actionPlan: [],
+    publicFees: item.publicFees,
+    cost: estimateCosts(profile, { country: item.country, city: item.city, startDate: item.startDate, endDate: item.endDate, publicFees: item.publicFees }),
+    sources,
+    watched: false,
+    changes: [],
+    createdAt: now(),
+    updatedAt: now(),
+  };
+}
+
+async function runDiscovery(discoveryId: string) {
+  const discovery = db.discoveries.find((item) => item.id === discoveryId);
+  if (!discovery) return;
+  const profile = companyProfileOf(discovery.userId);
+  if (!profile) {
+    discovery.status = 'failed';
+    discovery.error = '企业画像不存在，请重新填写企业信息。';
+    discovery.updatedAt = now();
+    flushDb(true);
+    return;
+  }
+  const bridge = new DeepSeekAcpBridge(rootDir, discovery.userId);
+  activeBridges.set(discoveryId, bridge);
+  const touch = (patch: Partial<Discovery>) => { Object.assign(discovery, patch, { updatedAt: now() }); flushDb(); };
+  const step = (label: string, detail?: string, status: 'running' | 'completed' | 'failed' = 'running') => {
+    discovery.activity.push({ label, detail, at: now(), status });
+    trimActivity(discovery);
+    touch({});
+  };
+  try {
+    const found = new Map<string, DiscoveredExhibition>();
+    const created: Exhibition[] = [];
+    const maxRounds = 3;
+    const maxExhibitions = 120;
+    for (let round = 1; round <= maxRounds; round += 1) {
+      step(`第 ${round} 轮展会检索`, round === 1 ? '按行业展、专业展、国际展、区域展、采购会与行业日历分头检索' : `补充检索，已收录 ${created.length} 个展会`);
+      const result = await withTimeout(bridge.run(buildDiscoveryPrompt(profile, { excludeNames: [...found.values()].map((item) => item.name), round }), (message) => {
+        const event = summarizeAcpUpdate(message);
+        discovery.activity.push({ label: event.label, detail: event.text.slice(0, 240), at: now(), status: 'running' });
+        trimActivity(discovery);
+        flushDb();
+      }), 20 * 60 * 1000, '展会检索超时，请重试');
+      const batch = normalizeDiscoveryPayload(extractJsonObject(result.finalText));
+      let added = 0;
+      for (const item of batch) {
+        const key = exhibitionKey(item);
+        if (found.has(key)) continue;
+        found.set(key, item);
+        const exhibition = createExhibitionRecord(discovery, profile, item);
+        db.exhibitions.push(exhibition);
+        created.push(exhibition);
+        added += 1;
+      }
+      step(`第 ${round} 轮检索完成`, `新增 ${added} 个，累计 ${created.length} 个`, 'completed');
+      discovery.exhibitionIds = created.map((item) => item.id);
+      if (added) touch({ stage: `已找到 ${created.length} 个候选展会（第 ${round} 轮）` });
+      if (!added || created.length >= maxExhibitions) break;
+    }
+    if (!created.length) throw new ApcError('DISCOVERY_EMPTY', '未检索到符合条件的展会，请补充企业信息或放宽筛选条件。');
+
+    discovery.exhibitionIds = created.map((item) => item.id);
+    touch({ stage: `已找到 ${created.length} 个候选展会` });
+    step('展会清单已生成', `${created.length} 个候选展会，开始调查匹配度最高的 3 个`);
+
+    const targets = [...created].sort((a, b) => b.fitScore - a.fitScore).slice(0, 3);
+    let failed = 0;
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index];
+      touch({ stage: `正在调查参展企业（${index + 1}/${targets.length}）：${target.name}` });
+      const ok = await researchExhibition(target.id, profile, bridge, false);
+      if (!ok) failed += 1;
+    }
+    step('调查完成', `已完成 ${targets.length - failed}/${targets.length} 个展会的参展企业调查`, failed ? 'failed' : 'completed');
+    discovery.status = failed === created.length ? 'failed' : failed ? 'partial' : 'completed';
+    discovery.stage = '调查完成';
+    discovery.updatedAt = now();
+    flushDb(true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    discovery.status = 'failed';
+    discovery.error = message;
+    discovery.stage = '检索失败';
+    discovery.activity.push({ label: '检索失败', detail: message, at: now(), status: 'failed' });
+    trimActivity(discovery);
+    discovery.updatedAt = now();
+    flushDb(true);
+  } finally {
+    bridge.close();
+    activeBridges.delete(discoveryId);
+  }
+}
+
+async function researchExhibition(exhibitionId: string, profile: CompanyProfile, bridge: DeepSeekAcpBridge, refresh: boolean): Promise<boolean> {
+  const exhibition = db.exhibitions.find((item) => item.id === exhibitionId);
+  if (!exhibition) return false;
+  const discovery = db.discoveries.find((item) => item.id === exhibition.discoveryId);
+  const step = (label: string, detail?: string) => {
+    if (!discovery) return;
+    discovery.activity.push({ label, detail, at: now(), status: 'running' });
+    trimActivity(discovery);
+    flushDb();
+  };
+  try {
+    exhibition.status = 'researching';
+    exhibition.error = undefined;
+    exhibition.updatedAt = now();
+    flushDb(true);
+    step(`正在调查：${exhibition.name}`, '读取参展商名录并核对企业主营业务');
+    const result = await withTimeout(bridge.run(buildDetailPrompt(profile, exhibition), (message) => {
+      const event = summarizeAcpUpdate(message);
+      if (discovery) {
+        discovery.activity.push({ label: event.label, detail: event.text.slice(0, 240), at: now(), status: 'running' });
+        trimActivity(discovery);
+      }
+      flushDb();
+    }), 20 * 60 * 1000, `「${exhibition.name}」调查超时`);
+
+    const detail = normalizeDetailPayload(extractJsonObject(result.finalText));
+    const previous = refresh ? JSON.parse(JSON.stringify(exhibition)) as Exhibition : undefined;
+    const rawSources = [...detail.sources];
+    if (detail.overview.website) rawSources.push({ title: '展会官网', url: detail.overview.website });
+    for (const fee of detail.publicFees) if (fee.sourceUrl) rawSources.push({ title: `费用：${fee.label}`, url: fee.sourceUrl });
+    const sources = rawSources.length ? await collectSources(rawSources, 'exhibition') : exhibition.sources;
+    const exhibitors: Exhibitor[] = detail.exhibitors.map((item) => ({
+      id: id('exb'),
+      name: item.name,
+      website: item.website,
+      country: item.country,
+      booth: item.booth,
+      role: item.role,
+      roleNote: item.roleNote,
+      reason: item.reason,
+      confidence: item.confidence,
+      evidenceIds: sources.slice(0, 2).map((source) => source.id),
+    }));
+
+    if (detail.overview.venue) exhibition.venue = detail.overview.venue;
+    if (detail.overview.organizer) exhibition.organizer = detail.overview.organizer;
+    if (detail.overview.theme) exhibition.theme = detail.overview.theme;
+    if (detail.overview.exhibitScope) exhibition.exhibitScope = detail.overview.exhibitScope;
+    if (detail.overview.participation) exhibition.participation = detail.overview.participation;
+    if (detail.overview.registrationDeadline) exhibition.registrationDeadline = detail.overview.registrationDeadline;
+    if (detail.overview.website) exhibition.website = detail.overview.website;
+    if (detail.publicFees.length) exhibition.publicFees = detail.publicFees;
+
+    const counts = computeCounts(exhibitors);
+    const score = scoreExhibition(exhibition.fitScore, counts);
+    exhibition.exhibitors = exhibitors;
+    exhibition.counts = counts;
+    exhibition.score = score;
+    exhibition.verdict = deriveVerdict(score, counts);
+    exhibition.verdictReason = detail.verdictReason || verdictReasonFromCounts(exhibition);
+    exhibition.agentVerdict = detail.agentVerdict;
+    if (detail.actionPlan.length) exhibition.actionPlan = detail.actionPlan;
+    exhibition.cost = estimateCosts(profile, exhibition);
+    if (sources.length) exhibition.sources = sources;
+    exhibition.status = 'ready';
+    exhibition.lastCheckedAt = now();
+    exhibition.updatedAt = now();
+    if (previous) {
+      const news = detail.notableUpdates.map((update) => ({ at: now(), type: 'status' as const, detail: `重点企业动态：${update}` }));
+      exhibition.changes = [
+        ...previous.changes,
+        ...news,
+        ...diffExhibition(previous, {
+          startDate: exhibition.startDate,
+          endDate: exhibition.endDate,
+          registrationDeadline: exhibition.registrationDeadline,
+          website: exhibition.website,
+          publicFees: exhibition.publicFees,
+          exhibitors,
+          counts,
+        }, now()),
+      ];
+    }
+    flushDb(true);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    exhibition.status = 'failed';
+    exhibition.error = message;
+    exhibition.updatedAt = now();
+    flushDb(true);
+    return false;
+  }
+}
+
+async function runExhibitorCheck(exhibitionId: string, exhibitorId: string) {
+  const exhibition = db.exhibitions.find((item) => item.id === exhibitionId);
+  const exhibitor = exhibition?.exhibitors.find((item) => item.id === exhibitorId);
+  if (!exhibition || !exhibitor) return;
+  const profile = companyProfileOf(exhibition.userId);
+  const bridge = new DeepSeekAcpBridge(rootDir, exhibition.userId);
+  activeBridges.set(`${exhibitionId}:${exhibitorId}`, bridge);
+  try {
+    const result = await withTimeout(bridge.run(`你是企业核验 Agent。请只使用已挂载的企查查 MCP 工具核验企业“${exhibitor.name}”${exhibitor.country ? `（${exhibitor.country}）` : ''}。${profile ? `该企业正在被评估为「${profile.name}」在展会「${exhibition.name}」中的潜在关系方。` : ''}如果存在多个同名主体，先列出候选并说明需要用户确认，不要猜测主体。请用简体中文输出：工商登记基本信息、股东/实际控制人、关联企业、经营风险要点，控制在 400 字以内；不要编造工商信息。`, () => undefined), 10 * 60 * 1000, '企查查核验超时');
+    exhibitor.qcc = { checkedAt: now(), summary: (result.finalText || '企查查 MCP 未返回内容。').slice(0, 1200) };
+    exhibition.updatedAt = now();
+    flushDb(true);
+  } catch (error) {
+    exhibitor.qcc = { checkedAt: now(), summary: `核验失败：${error instanceof Error ? error.message : '未知错误'}` };
+    exhibition.updatedAt = now();
+    flushDb(true);
+  } finally {
+    bridge.close();
+    activeBridges.delete(`${exhibitionId}:${exhibitorId}`);
+  }
+}
+
+function pdfHeading(doc: PdfDoc, text: string) {
+  if (doc.y > 730) doc.addPage();
+  doc.moveDown(0.7).fontSize(13).fillColor('#111111').text(text);
+  doc.moveDown(0.2);
+}
+function pdfLine(doc: PdfDoc, text: string, size = 10) {
+  if (doc.y > 770) doc.addPage();
+  doc.fontSize(size).fillColor('#222222').text(text, { width: 500 });
+}
+
+function moneyText(value: number): string {
+  return `¥${Math.round(value).toLocaleString('zh-CN')}`;
+}
+
+function sendExhibitionPdf(exhibition: Exhibition, profile: CompanyProfile, res: Response) {
+  const doc = new PDFDocument({ size: 'A4', margin: 48 }) as PdfDoc;
+  applyReportFont(doc);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${exhibition.id}.pdf"`);
+  doc.pipe(res);
+  doc.fontSize(20).fillColor('#111111').text(exhibition.name, { width: 500 });
+  doc.moveDown(0.4).fontSize(10).fillColor('#555555').text(`针对「${profile.name}」 · 结论：${VERDICT_LABELS[exhibition.verdict]} · 综合评分 ${exhibition.score}/100 · 生成于 ${now().slice(0, 10)}`);
+  doc.moveDown(0.8);
+
+  pdfHeading(doc, '一、展会基本情况');
+  const basics: Array<[string, string]> = [
+    ...(exhibition.type ? ([['展会类型', exhibition.type]] as Array<[string, string]>) : []),
+    ['展期', exhibition.startDate ? `${exhibition.startDate}${exhibition.endDate && exhibition.endDate !== exhibition.startDate ? ` 至 ${exhibition.endDate}` : ''}` : '待确认'],
+    ['城市 / 国家', [exhibition.city, exhibition.country].filter(Boolean).join('，') || '待确认'],
+  ];
+  if (exhibition.venue) basics.push(['展馆', exhibition.venue]);
+  if (exhibition.organizer) basics.push(['主办方', exhibition.organizer]);
+  if (exhibition.registrationDeadline) basics.push(['报名截止', exhibition.registrationDeadline]);
+  if (exhibition.website) basics.push(['官网', exhibition.website]);
+  for (const [label, value] of basics) pdfLine(doc, `${label}：${value}`);
+
+  pdfHeading(doc, '二、推荐理由与判断');
+  pdfLine(doc, `${VERDICT_LABELS[exhibition.verdict]}（综合评分 ${exhibition.score}/100）`);
+  if (exhibition.verdictReason) pdfLine(doc, exhibition.verdictReason);
+  if (exhibition.fitReasons.length) {
+    pdfLine(doc, '匹配点：');
+    for (const reason of exhibition.fitReasons) pdfLine(doc, `- ${reason}`, 9);
+  }
+  pdfLine(doc, `企业构成：共 ${exhibition.counts.total} 家，潜在客户 ${exhibition.counts.customer}，合作伙伴 ${exhibition.counts.partner}，渠道商 ${exhibition.counts.channel}，供应商 ${exhibition.counts.supplier}，竞争对手 ${exhibition.counts.competitor}。`);
+  const modeText: Record<Exhibition['verdict'], string> = {
+    attend: '参展（预订展位，并邀约重点客户到展位）',
+    'visit-first': '先观展考察，再决定是否参展',
+    'contact-first': '只拜访重点企业，不设展位',
+    confirm: '先观展或联系主办方确认关键信息后再决定',
+    skip: '不建议专程前往，可改为线上跟进',
+  };
+  pdfLine(doc, `建议方式：${modeText[exhibition.verdict]}`);
+
+  pdfHeading(doc, '三、参展企业名单');
+  const groups: Array<[string, Exhibitor['role']]> = [['重点潜在客户', 'customer'], ['合作伙伴', 'partner'], ['渠道商', 'channel'], ['供应商', 'supplier'], ['竞争对手', 'competitor']];
+  for (const [label, role] of groups) {
+    const items = exhibition.exhibitors.filter((item) => item.role === role);
+    if (!items.length) continue;
+    pdfLine(doc, `${label}（${items.length}）`);
+    for (const item of items.slice(0, 30)) pdfLine(doc, `- ${item.name}${item.country ? `（${item.country}）` : ''}${item.reason ? ` — ${item.reason}` : ''}${item.website ? ` ${item.website}` : ''}`, 9);
+  }
+
+  pdfHeading(doc, '四、预计费用（估算）');
+  for (const item of exhibition.cost.items) pdfLine(doc, `${item.label}：${moneyText(item.min)} – ${moneyText(item.max)}${item.note ? `（${item.note}）` : ''}`);
+  pdfLine(doc, `参展合计：${moneyText(exhibition.cost.totalMin)} – ${moneyText(exhibition.cost.totalMax)}`);
+  pdfLine(doc, `只去观展：${moneyText(exhibition.cost.modes.visit.min)} – ${moneyText(exhibition.cost.modes.visit.max)}`);
+  pdfLine(doc, `只拜访重点企业：${moneyText(exhibition.cost.modes.contact.min)} – ${moneyText(exhibition.cost.modes.contact.max)}`);
+  if (exhibition.publicFees.length) {
+    pdfLine(doc, '公开报价线索：', 9);
+    for (const fee of exhibition.publicFees) {
+      pdfLine(doc, `- ${fee.label}：${fee.amount !== undefined ? `${fee.amount}${fee.currency ? ` ${fee.currency}` : ''}${fee.unit ? `/${fee.unit.replace(/^\//, '')}` : ''}` : '金额未公开'}${fee.sourceUrl ? `（${fee.sourceUrl}）` : ''}`, 9);
+    }
+  }
+  pdfLine(doc, '以上为估算区间，不是主办方报价；下单前请以官方报价单为准。', 9);
+
+  pdfHeading(doc, '五、建议接触的企业与行动清单');
+  const priority = exhibition.exhibitors.filter((item) => item.role === 'customer' || item.role === 'partner').slice(0, 12);
+  for (const item of priority) pdfLine(doc, `- ${item.name}：${item.reason || '建议提前预约'}`);
+  exhibition.actionPlan.forEach((item, index) => pdfLine(doc, `${index + 1}. ${item}`));
+
+  pdfHeading(doc, '六、报名时间与注意事项');
+  pdfLine(doc, `报名截止：${exhibition.registrationDeadline || '未公开，建议直接联系主办方确认'}`);
+  pdfLine(doc, '建议在截止前至少 4 周完成展位确认与行程预订；展位价格与规则以主办方最新通知为准。');
+
+  pdfHeading(doc, '七、信息来源');
+  if (exhibition.sources.length) {
+    for (const source of exhibition.sources) pdfLine(doc, `- ${source.title}：${source.url}（${source.status === 'verified' ? '已核验' : '待核验'}）`, 9);
+  } else {
+    pdfLine(doc, '本次调查未记录到可公开验证的来源。', 9);
+  }
+  doc.end();
+}
+
+app.get('/api/company', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  res.json({ profile: companyProfileOf(user.id) || null });
+});
+
+app.put('/api/company', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  try {
+    const existing = companyProfileOf(user.id);
+    const profile = profileFromBody(user.id, req.body, existing);
+    if (existing) Object.assign(existing, profile);
+    else db.companies.push(profile);
+    flushDb(true);
+    res.json({ profile });
+  } catch (error) {
+    const err = error as ApcError;
+    res.status(400).json({ error: err.code || 'INVALID_COMPANY', message: err.message || '企业信息无效。' });
+  }
+});
+
+app.get('/api/discoveries', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  res.json(db.discoveries.filter((item) => item.userId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+});
+
+app.post('/api/discoveries', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  try { requireHarnessConfig(user.id); } catch (error) { const err = error as ApcError; return res.status(503).json({ error: err.code, message: err.message }); }
+  const profile = companyProfileOf(user.id);
+  if (!profile) return res.status(400).json({ error: 'COMPANY_PROFILE_REQUIRED', message: '请先填写企业信息。' });
+  const running = db.discoveries.find((item) => item.userId === user.id && item.status === 'running');
+  if (running) return res.status(409).json({ error: 'DISCOVERY_RUNNING', message: '已有一个检索任务在进行中，请等待完成或先停止。' });
+  const discovery: Discovery = {
+    id: id('dsc'),
+    userId: user.id,
+    profileId: profile.id,
+    status: 'running',
+    stage: '准备检索',
+    exhibitionIds: [],
+    activity: [{ label: '已创建展会检索任务', at: now(), status: 'running' }],
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  db.discoveries.push(discovery);
+  writeDb(db);
+  void runDiscovery(discovery.id);
+  res.status(202).json({ discovery });
+});
+
+app.get('/api/discoveries/:id', requireUser, (req, res) => {
+  const discovery = getDiscovery(req, res);
+  if (!discovery) return;
+  res.json({ discovery, exhibitions: db.exhibitions.filter((item) => discovery.exhibitionIds.includes(item.id)).map(refreshCost) });
+});
+
+app.post('/api/discoveries/:id/cancel', requireUser, (req, res) => {
+  const discovery = getDiscovery(req, res);
+  if (!discovery) return;
+  const bridge = activeBridges.get(discovery.id);
+  if (!bridge) return res.status(409).json({ error: 'NO_ACTIVE_TASK', message: '当前没有可停止的检索任务。' });
+  bridge.close();
+  activeBridges.delete(discovery.id);
+  discovery.status = 'failed';
+  discovery.error = '任务已由用户停止。';
+  discovery.stage = '已停止';
+  discovery.activity.push({ label: '用户停止任务', at: now(), status: 'failed' });
+  discovery.updatedAt = now();
+  flushDb(true);
+  res.json({ discovery });
+});
+
+app.get('/api/exhibitions', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  res.json(db.exhibitions.filter((item) => item.userId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(refreshCost));
+});
+
+app.get('/api/exhibitions/:id', requireUser, (req, res) => {
+  const exhibition = getExhibition(req, res);
+  if (exhibition) res.json({ exhibition: refreshCost(exhibition) });
+});
+
+app.post('/api/exhibitions/:id/research', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  try { requireHarnessConfig(user.id); } catch (error) { const err = error as ApcError; return res.status(503).json({ error: err.code, message: err.message }); }
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  if (exhibition.status === 'researching') return res.status(409).json({ error: 'ALREADY_RESEARCHING', message: '该展会正在调查中。' });
+  const profile = companyProfileOf(user.id);
+  if (!profile) return res.status(400).json({ error: 'COMPANY_PROFILE_REQUIRED', message: '请先填写企业信息。' });
+  const bridge = new DeepSeekAcpBridge(rootDir, user.id);
+  activeBridges.set(exhibition.id, bridge);
+  res.status(202).json({ exhibition });
+  void researchExhibition(exhibition.id, profile, bridge, false).finally(() => {
+    bridge.close();
+    activeBridges.delete(exhibition.id);
+  });
+});
+
+app.post('/api/exhibitions/:id/refresh', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  try { requireHarnessConfig(user.id); } catch (error) { const err = error as ApcError; return res.status(503).json({ error: err.code, message: err.message }); }
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  if (exhibition.status === 'researching') return res.status(409).json({ error: 'ALREADY_RESEARCHING', message: '该展会正在调查中。' });
+  const profile = companyProfileOf(user.id);
+  if (!profile) return res.status(400).json({ error: 'COMPANY_PROFILE_REQUIRED', message: '请先填写企业信息。' });
+  const bridge = new DeepSeekAcpBridge(rootDir, user.id);
+  activeBridges.set(exhibition.id, bridge);
+  res.status(202).json({ exhibition });
+  void researchExhibition(exhibition.id, profile, bridge, true).finally(() => {
+    bridge.close();
+    activeBridges.delete(exhibition.id);
+  });
+});
+
+app.post('/api/exhibitions/:id/watch', requireUser, (req, res) => {
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  exhibition.watched = Boolean(req.body?.watched);
+  exhibition.updatedAt = now();
+  flushDb(true);
+  res.json({ exhibition });
+});
+
+app.post('/api/exhibitions/:id/exhibitors/:exhibitorId/verify', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  try { requireQccConfig(user.id); } catch (error) { const err = error as ApcError; return res.status(503).json({ error: err.code, message: err.message }); }
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  const exhibitor = exhibition.exhibitors.find((item) => item.id === req.params.exhibitorId);
+  if (!exhibitor) return res.status(404).json({ error: 'EXHIBITOR_NOT_FOUND', message: '参展企业不存在。' });
+  exhibitor.qcc = { checkedAt: now(), summary: '核验中…' };
+  exhibition.updatedAt = now();
+  flushDb(true);
+  void runExhibitorCheck(exhibition.id, exhibitor.id);
+  res.status(202).json({ ok: true, message: '企查查核验已提交。' });
+});
+
+app.get('/api/exhibitions/:id/report.md', requireUser, (req, res) => {
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  const profile = companyProfileOf(exhibition.userId);
+  if (!profile) return res.status(409).json({ error: 'COMPANY_PROFILE_REQUIRED', message: '企业画像缺失。' });
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${exhibition.id}.md"`);
+  res.send(buildExhibitionReport(exhibition, profile));
+});
+
+app.get('/api/exhibitions/:id/report.pdf', requireUser, (req, res) => {
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  const profile = companyProfileOf(exhibition.userId);
+  if (!profile) return res.status(409).json({ error: 'COMPANY_PROFILE_REQUIRED', message: '企业画像缺失。' });
+  sendExhibitionPdf(exhibition, profile, res);
+});
+
+app.get('/api/exhibitions/:id/report.csv', requireUser, (req, res) => {
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  const header = ['企业名称', '关系', '判断理由', '置信度', '国家', '展位', '官网'];
+  const rows = exhibition.exhibitors.map((item) => [
+    item.name,
+    ROLE_LABELS[item.role],
+    item.reason,
+    String(item.confidence),
+    item.country || '',
+    item.booth || '',
+    item.website || '',
+  ]);
+  const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${exhibition.id}-exhibitors.csv"`);
+  res.send(`\uFEFF${csv}\r\n`);
+});
+
+/* ==========================================================================
+   直连对话 Agent：不拼接任何提示词，原样转发到 DeepSeek Harness ACP。
+   ========================================================================== */
+
+const chatBridges = new Map<string, DeepSeekAcpBridge>();
+
+function getChat(req: Request, res: Response) {
+  const user = (req as Request & { user: User }).user;
+  const chat = db.chats.find((item) => item.id === req.params.id && item.userId === user.id);
+  if (!chat) { res.status(404).json({ error: 'NOT_FOUND', message: '对话不存在或无权访问。' }); return; }
+  return chat;
+}
+
+async function runChat(chatId: string) {
+  const chat = db.chats.find((item) => item.id === chatId);
+  if (!chat) return;
+  const lastUser = [...chat.messages].reverse().find((message) => message.role === 'user');
+  if (!lastUser) return;
+  const attempt = async (sessionId: string | undefined, bridge: DeepSeekAcpBridge) => {
+    const result = await withTimeout(bridge.runChat(sessionId, lastUser.text, (message) => {
+      const event = summarizeAcpUpdate(message);
+      const at = now();
+      chat.activity.push({ label: event.label, detail: event.text.slice(0, 200), at, status: 'running' });
+      if (chat.activity.length > 80) chat.activity.splice(0, chat.activity.length - 80);
+      trace.push({ label: event.label, detail: event.text.slice(0, 400), at });
+      if (trace.length > 80) trace.splice(0, trace.length - 80);
+      flushDb();
+    }), 20 * 60 * 1000, '对话超时');
+    return { result, bridge };
+  };
+  const trace: { label: string; detail?: string; at: string }[] = [];
+  let bridge = chatBridges.get(chatId) ?? new DeepSeekAcpBridge(rootDir, chat.userId, 'chat');
+  chatBridges.set(chatId, bridge);
+  chat.status = 'running';
+  chat.error = undefined;
+  chat.updatedAt = now();
+  flushDb(true);
+  try {
+    let result
+    try {
+      result = (await attempt(chat.harnessSessionId, bridge)).result;
+    } catch (error) {
+      // Harness 重启后旧 session 往往不可用：清掉会话，开新 session 重试一次（不注入历史或提示词）。
+      if (!chat.harnessSessionId) throw error;
+      chat.harnessSessionId = undefined;
+      chat.messages.push({ id: id('msg'), role: 'system', text: '上一次 Harness 会话已失效，已开始新会话（之前的上下文不再保留）。', at: now() });
+      bridge.close();
+      chatBridges.delete(chatId);
+      bridge = new DeepSeekAcpBridge(rootDir, chat.userId, 'chat');
+      chatBridges.set(chatId, bridge);
+      result = (await attempt(undefined, bridge)).result;
+    }
+    chat.harnessSessionId = result.sessionId;
+    chat.messages.push({ id: id('msg'), role: 'assistant', text: result.finalText.trim() || '（没有返回文本）', at: now(), trace: [...trace] });
+    chat.status = 'idle';
+    chat.updatedAt = now();
+    flushDb(true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    chat.status = 'failed';
+    chat.error = message;
+    chat.messages.push({ id: id('msg'), role: 'system', text: `对话失败：${message}`, at: now() });
+    chat.updatedAt = now();
+    flushDb(true);
+  }
+}
+
+app.get('/api/chats', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  res.json(db.chats.filter((item) => item.userId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+});
+
+app.post('/api/chats', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  const chat: ChatSession = {
+    id: id('cht'),
+    userId: user.id,
+    title: '新对话',
+    messages: [],
+    activity: [],
+    status: 'idle',
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  db.chats.push(chat);
+  flushDb(true);
+  res.status(201).json({ chat });
+});
+
+app.get('/api/chats/:id', requireUser, (req, res) => {
+  const chat = getChat(req, res);
+  if (chat) res.json({ chat });
+});
+
+app.post('/api/chats/:id/messages', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  const chat = getChat(req, res);
+  if (!chat) return;
+  try { requireHarnessConfig(user.id); } catch (error) { const err = error as ApcError; return res.status(503).json({ error: err.code, message: err.message }); }
+  if (chat.status === 'running') return res.status(409).json({ error: 'CHAT_RUNNING', message: '上一条消息还在处理中。' });
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (!text) return res.status(400).json({ error: 'EMPTY_MESSAGE', message: '请输入消息。' });
+  if (text.length > 8000) return res.status(400).json({ error: 'MESSAGE_TOO_LONG', message: '单条消息不能超过 8000 字。' });
+  chat.messages.push({ id: id('msg'), role: 'user', text, at: now() });
+  if (chat.messages.filter((message) => message.role === 'user').length === 1) chat.title = text.length > 24 ? `${text.slice(0, 24)}…` : text;
+  chat.status = 'running';
+  chat.updatedAt = now();
+  flushDb(true);
+  void runChat(chat.id);
+  res.status(202).json({ chat });
+});
+
+app.post('/api/chats/:id/cancel', requireUser, (req, res) => {
+  const chat = getChat(req, res);
+  if (!chat) return;
+  const bridge = chatBridges.get(chat.id);
+  if (!bridge) return res.status(409).json({ error: 'NO_ACTIVE_TASK', message: '当前没有可停止的对话。' });
+  bridge.close();
+  chatBridges.delete(chat.id);
+  chat.status = 'failed';
+  chat.error = '对话已由用户停止。';
+  chat.messages.push({ id: id('msg'), role: 'system', text: '对话已由用户停止。', at: now() });
+  chat.updatedAt = now();
+  flushDb(true);
+  res.json({ chat });
+});
+
+app.delete('/api/chats/:id', requireUser, (req, res) => {
+  const chat = getChat(req, res);
+  if (!chat) return;
+  chatBridges.get(chat.id)?.close();
+  chatBridges.delete(chat.id);
+  db.chats = db.chats.filter((item) => item.id !== chat.id);
+  flushDb(true);
+  res.status(204).end();
+});
+
 if (process.env.SERVE_CLIENT === '1') {
   const clientDir = path.join(rootDir, 'dist');
   app.use(express.static(clientDir));

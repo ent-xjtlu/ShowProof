@@ -58,3 +58,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# 研究过程临时目录（不要提交）
+.tmp_*/
+scratch/
+
+# 研究过程临时目录（不要提交）
+.tmp*/
