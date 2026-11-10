@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { chatApi, type GlobalFile } from '../lib/chatApi'
 import { clock } from '../lib/format'
+import { useI18n } from '../i18n'
 
 interface Props {
   open: boolean
@@ -13,6 +14,7 @@ const formatBytes = (value: number) => value >= 1024 * 1024
   : value >= 1024 ? `${(value / 1024).toFixed(1)} KB` : `${value} B`
 
 export function FilesPanel({ open, onClose, onOpenChat }: Props) {
+  const { t } = useI18n()
   const [files, setFiles] = useState<GlobalFile[]>([])
   const [totalBytes, setTotalBytes] = useState(0)
   const [error, setError] = useState('')
@@ -47,29 +49,29 @@ export function FilesPanel({ open, onClose, onOpenChat }: Props) {
 
   return (
     <>
-      <button type="button" className="settings-scrim" aria-label="关闭文件库" onClick={onClose} />
-      <aside className="settings-panel help-panel files-panel" aria-label="文件库">
+      <button type="button" className="settings-scrim" aria-label={t('files.close')} onClick={onClose} />
+      <aside className="settings-panel help-panel files-panel" aria-label={t('files.title')}>
         <header className="settings-panel__head">
           <div>
             <span className="mono settings-panel__eyebrow">FILES · 文件库</span>
-            <h2>所有对话的文件</h2>
+            <h2>{t('files.title')}</h2>
           </div>
-          <button type="button" className="detail__close" onClick={onClose} aria-label="关闭">×</button>
+          <button type="button" className="detail__close" onClick={onClose} aria-label={t('settings.closeGeneric')}>×</button>
         </header>
         <div className="settings-panel__body">
           <p className="settings-panel__lead">
-            这里汇总所有对话工作区里的文件：报告、笔记、CSV、截图、OCR 结果等。Markdown 可直接导出 PDF；下载链接带 hash，复制到浏览器也能打开。
+            {t('files.lead')}
           </p>
           <div className="files-summary">
             <span className="mono">{files.length} 个文件 · {formatBytes(totalBytes)}</span>
-            <button type="button" className="btn btn--ghost" onClick={() => void refresh()} disabled={busy}>{busy ? '刷新中…' : '刷新'}</button>
+            <button type="button" className="btn btn--ghost" onClick={() => void refresh()} disabled={busy}>{busy ? t('files.refreshing') : t('files.refresh')}</button>
           </div>
           {error && <p className="settings-message settings-message--error" role="alert">{error}</p>}
-          {!busy && files.length === 0 && <p className="settings-panel__hint">还没有文件。让 Agent 写报告、笔记或截图后，会自动出现在这里。</p>}
+          {!busy && files.length === 0 && <p className="settings-panel__hint">{t('files.empty')}</p>}
           {[...groups.entries()].map(([chatId, group]) => (
             <section className="files-group" key={chatId}>
               <header className="files-group__head">
-                <button type="button" className="files-group__title" onClick={() => onOpenChat(chatId)} title="打开这个对话">
+                <button type="button" className="files-group__title" onClick={() => onOpenChat(chatId)} title={t('files.openChat')}>
                   {group.title}
                 </button>
                 <span className="mono files-group__count">{group.files.length}</span>
@@ -82,13 +84,13 @@ export function FilesPanel({ open, onClose, onOpenChat }: Props) {
                       <span className="files-row__sub mono">{formatBytes(file.size)} · {clock(file.updatedAt)}</span>
                     </div>
                     {file.pdfUrl && <a className="btn btn--ghost files-row__btn" href={file.pdfUrl}>PDF</a>}
-                    <a className="btn btn--ghost files-row__btn" href={file.downloadUrl}>下载</a>
+                    <a className="btn btn--ghost files-row__btn" href={file.downloadUrl}>{t('files.download')}</a>
                   </li>
                 ))}
               </ul>
             </section>
           ))}
-          <p className="settings-panel__foot mono">文件保存在本机数据目录，按对话隔离；Agent 只能写自己的对话工作区。</p>
+          <p className="settings-panel__foot mono">{t('files.foot')}</p>
         </div>
       </aside>
     </>
