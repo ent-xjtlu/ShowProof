@@ -141,6 +141,20 @@ function readDb(): Db {
 function writeDb(db: Db) { fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), { mode: 0o600 }); try { fs.chmodSync(dbPath, 0o600); } catch { /* best effort on non-POSIX filesystems */ } }
 let db = readDb();
 if (!db.downloadSecret) { db.downloadSecret = crypto.randomBytes(24).toString('hex'); writeDb(db); }
+
+// 清理早期原型遗留的明文密码账号：正式版本只接受 scrypt 哈希，
+// 避免安装包在旧 userData 上出现“自带的初始账号”。
+{
+  const legacyUsers = db.users.filter((user) => !user.passwordHash && typeof user.password === 'string');
+  if (legacyUsers.length) {
+    const legacyIds = new Set(legacyUsers.map((user) => user.id));
+    db.users = db.users.filter((user) => !legacyIds.has(user.id));
+    for (const [token, userId] of Object.entries(db.sessions)) {
+      if (legacyIds.has(userId)) delete db.sessions[token];
+    }
+    writeDb(db);
+  }
+}
 const now = () => new Date().toISOString();
 
 // 进程重启后，遗留的 running/researching 状态没有执行者，标记为中断以免界面永久转圈。
@@ -217,10 +231,7 @@ function verifyPassword(stored: User, password: string): boolean {
       return false;
     }
   }
-  if (typeof stored.password !== 'string') return false;
-  const expected = Buffer.from(stored.password);
-  const actual = Buffer.from(password);
-  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  return false;
 }
 
 function validateAccountInput(body: any) {
@@ -791,7 +802,6 @@ app.post('/api/auth/login', (req, res) => {
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   const user = db.users.find((item) => item.email.toLowerCase() === email);
   if (!user || !verifyPassword(user, password)) return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '邮箱或密码错误。' });
-  if (!user.passwordHash) { user.passwordHash = hashPassword(password); delete user.password; writeDb(db); }
   const token = crypto.randomBytes(24).toString('hex'); db.sessions[token] = user.id; writeDb(db); res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
 });
 app.post('/api/auth/logout', requireUser, (req, res) => { const auth = req.headers.authorization?.replace(/^Bearer\s+/i, ''); if (auth) delete db.sessions[auth]; writeDb(db); res.status(204).end(); });

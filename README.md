@@ -257,9 +257,12 @@ npm run dist:win
 
 ### 安装版首次启动
 
+- 安装包**不包含任何账号、密码或模型密钥**；首次启动会进入「创建本机账号」。
+- 早期原型遗留的明文密码账号会在启动时自动清理，不会随安装包分发。
 - 解包/安装后首次启动会把 Harness 复制到用户数据目录并安装依赖，需要网络。
 - 模型 Key、企查查 Key、MinerU Token 都只保存在本机；安装包不包含密钥。
-- 数据位置：Electron 的 `userData` 目录（Linux 通常在 `~/.config/` 下，Windows 在 `%APPDATA%` 下），其中的 `data/` 保存数据库与 Agent 工作区。
+- 数据位置：Electron 的 `userData` 目录（Linux 通常为 `~/.config/domel-market-intelligence-web/`，Windows 为 `%APPDATA%/domel-market-intelligence-web/`），其中的 `data/` 保存数据库与 Agent 工作区。
+- 彻底重置（会删除本机账号、企业画像、展会与对话）：退出应用后删除上述 `userData` 目录，再启动即可重新创建账号。
 
 ## 数据与隐私
 
@@ -282,6 +285,7 @@ npm run dist:win
 - 费用为估算区间，实际以主办方报价为准。
 - 企查查需要单独授权；没有授权时跳过工商核验。
 - 端口被占用：`EADDRINUSE` 时先停止旧进程，或设置 `PORT`。
+- 启动后直接出现旧账号：说明本机保留了旧的 `userData`；新版本会清理早期明文账号，若要完全重置请删除 `userData` 目录。
 - 打包后 Agent 工具不可用：确认 `build/playwright-runtime/agent-mcp.mjs` 已生成，且 Electron 设置了 `SHIZHENG_AGENT_MCP_SCRIPT`。
 - 首次启动卡在依赖安装：需要网络访问 npm registry；离线环境需预先准备 Harness 依赖。
 - PDF 中文乱码：确认 `assets/fonts/NotoSansCJK-Regular.ttc` 存在，或设置 `SHIZHENG_REPORT_FONT`。
