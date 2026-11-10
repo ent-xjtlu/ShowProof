@@ -13,7 +13,7 @@ interface Props {
 }
 
 export function LoginScreen({ setupRequired, onLogin }: Props) {
-  const { t } = useI18n()
+  const { t, toggleLocale } = useI18n()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -46,6 +46,7 @@ export function LoginScreen({ setupRequired, onLogin }: Props) {
     <main className="login-screen">
       <div className="login-screen__grid" aria-hidden="true" />
       <section className="login-card">
+        <button type="button" className="topbar__detail" onClick={toggleLocale}>{t('locale.switch')}</button>
         <div className="login-card__brand">
           <span className="brand__mark" aria-hidden />
           <div>
