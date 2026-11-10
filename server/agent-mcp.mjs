@@ -91,7 +91,7 @@ const tools = [
   },
   {
     name: 'shizheng_exhibition_update',
-    description: '修改展会目录中的一条记录（名称、日期、城市、国家、官网、展馆、主办方、匹配度、备注等）。只传需要修改的字段。',
+    description: '修改展会目录中的一条记录（名称、日期、城市、国家、官网、展馆、主办方、匹配度、备注、状态等）。只传需要修改的字段；用户要求把失败/卡住的状态改回待调查时，传 status=queued。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -117,6 +117,7 @@ const tools = [
             mismatchReasons: { type: 'array', items: { type: 'string' } },
             note: { type: 'string' },
             watched: { type: 'boolean' },
+            status: { type: 'string', enum: ['queued', 'researching', 'ready', 'failed'], description: '手动修正状态，例如把失败的展会改回 queued' },
           },
           additionalProperties: false,
         },

@@ -230,6 +230,16 @@ export default function App() {
     bulkStarting.current = null
   }
 
+  const changeStatus = async (id: string, status: Exhibition['status']) => {
+    try {
+      const { exhibition } = await workspaceApi.updateExhibition(id, { status })
+      setExhibitions((prev) => mergeExhibitions(prev, [exhibition]))
+      notify(`展会状态已改为${status === 'queued' ? '待调查' : status === 'ready' ? '已调查' : status === 'failed' ? '调查失败' : '调查中'}`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '修改状态失败', true)
+    }
+  }
+
   const watch = async (id: string, watched: boolean) => {
     try {
       const { exhibition } = await workspaceApi.watchExhibition(id, watched)
@@ -544,6 +554,7 @@ export default function App() {
               onResearch={() => void research(selected.id)}
               onRefresh={() => void refresh(selected.id)}
               onWatch={(watched) => void watch(selected.id, watched)}
+              onStatusChange={(status) => void changeStatus(selected.id, status)}
               onVerify={(exhibitorId) => void verify(selected.id, exhibitorId)}
               onExport={(kind) => void exportReport(kind)}
             />

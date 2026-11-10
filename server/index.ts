@@ -1073,6 +1073,15 @@ function updateAgentExhibition(exhibition: Exhibition, body: any): Exhibition {
   if ('mismatchReasons' in patch) exhibition.mismatchReasons = asList((patch as any).mismatchReasons, 12);
   if ('watched' in patch) exhibition.watched = Boolean((patch as any).watched);
   if ('note' in patch) exhibition.agentNote = asText((patch as any).note, 1000) || undefined;
+  if ('status' in patch) {
+    const status = asText((patch as any).status, 20);
+    if (!['queued', 'researching', 'ready', 'failed'].includes(status)) {
+      throw new ApcError('INVALID_EXHIBITION_STATUS', '状态必须是 queued、researching、ready 或 failed。');
+    }
+    exhibition.status = status as Exhibition['status'];
+    if (status !== 'failed') exhibition.error = undefined;
+    exhibition.changes.push({ at: now(), type: 'status', detail: `状态改为 ${status}` });
+  }
   exhibition.score = scoreExhibition(exhibition.fitScore, exhibition.counts);
   exhibition.verdict = deriveVerdict(exhibition.score, exhibition.counts);
   exhibition.updatedAt = now();
@@ -1666,6 +1675,19 @@ app.get('/api/exhibitions', requireUser, (req, res) => {
 app.get('/api/exhibitions/:id', requireUser, (req, res) => {
   const exhibition = getExhibition(req, res);
   if (exhibition) res.json({ exhibition: refreshCost(exhibition) });
+});
+
+app.patch('/api/exhibitions/:id', requireUser, (req, res) => {
+  const exhibition = getExhibition(req, res);
+  if (!exhibition) return;
+  try {
+    updateAgentExhibition(exhibition, req.body || {});
+    flushDb(true);
+    res.json({ exhibition: refreshCost(exhibition) });
+  } catch (error) {
+    const err = error as ApcError;
+    res.status(400).json({ error: err.code || 'INVALID_EXHIBITION', message: err.message });
+  }
 });
 
 app.post('/api/exhibitions/:id/research', requireUser, (req, res) => {

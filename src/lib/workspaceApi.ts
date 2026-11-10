@@ -39,6 +39,7 @@ export const workspaceApi = {
   cancelDiscovery: (id: string) => request<{ discovery: Discovery }>(`/api/discoveries/${id}/cancel`, { method: 'POST' }),
   listExhibitions: () => request<Exhibition[]>('/api/exhibitions'),
   getExhibition: (id: string) => request<{ exhibition: Exhibition }>(`/api/exhibitions/${id}`),
+  updateExhibition: (id: string, patch: Partial<Exhibition>) => request<{ exhibition: Exhibition }>(`/api/exhibitions/${id}`, { method: 'PATCH', body: JSON.stringify({ patch }) }),
   researchExhibition: (id: string) => request<{ exhibition: Exhibition }>(`/api/exhibitions/${id}/research`, { method: 'POST' }),
   refreshExhibition: (id: string) => request<{ exhibition: Exhibition }>(`/api/exhibitions/${id}/refresh`, { method: 'POST' }),
   watchExhibition: (id: string, watched: boolean) => request<{ exhibition: Exhibition }>(`/api/exhibitions/${id}/watch`, { method: 'POST', body: JSON.stringify({ watched }) }),

@@ -84,6 +84,14 @@ test('agent can create, list, update, archive and restore an exhibition', async 
   assert.equal(updated.payload.exhibition.venue, '国家会展中心');
   assert.ok(updated.payload.exhibition.score >= 44);
 
+  const failed = await agent(`/api/agent/exhibitions/${id}`, { method: 'PATCH', body: JSON.stringify({ patch: { status: 'failed' } }) });
+  assert.equal(failed.status, 200);
+  assert.equal(failed.payload.exhibition.status, 'failed');
+
+  const manual = await api(`/api/exhibitions/${id}`, { method: 'PATCH', body: JSON.stringify({ patch: { status: 'queued' } }) });
+  assert.equal(manual.status, 200);
+  assert.equal(manual.payload.exhibition.status, 'queued');
+
   const archived = await agent(`/api/agent/exhibitions/${id}/archive`, { method: 'POST', body: JSON.stringify({ reason: '测试归档' }) });
   assert.equal(archived.status, 200);
   assert.ok(archived.payload.exhibition.archivedAt);

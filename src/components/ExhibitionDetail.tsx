@@ -17,11 +17,12 @@ interface Props {
   onResearch: () => void
   onRefresh: () => void
   onWatch: (watched: boolean) => void
+  onStatusChange: (status: Exhibition['status']) => void
   onVerify: (exhibitorId: string) => void
   onExport: (kind: 'md' | 'pdf' | 'csv') => void
 }
 
-export function ExhibitionDetail({ exhibition, busy, onBack, onResearch, onRefresh, onWatch, onVerify, onExport }: Props) {
+export function ExhibitionDetail({ exhibition, busy, onBack, onResearch, onRefresh, onWatch, onStatusChange, onVerify, onExport }: Props) {
   const [role, setRole] = useState<ExhibitorRole | 'all'>('all')
   const [qccOpen, setQccOpen] = useState<string | null>(null)
   const [exporting, setExporting] = useState<string | null>(null)
@@ -67,6 +68,15 @@ export function ExhibitionDetail({ exhibition, busy, onBack, onResearch, onRefre
           <button type="button" className="btn btn--ghost" aria-pressed={exhibition.watched} onClick={() => onWatch(!exhibition.watched)}>
             {exhibition.watched ? '★ 已关注' : '☆ 关注'}
           </button>
+          <label className="detailx__status mono">
+            <span>状态</span>
+            <select value={exhibition.status} onChange={(event) => onStatusChange(event.target.value as Exhibition['status'])}>
+              <option value="queued">待调查</option>
+              <option value="researching">调查中</option>
+              <option value="ready">已调查</option>
+              <option value="failed">调查失败</option>
+            </select>
+          </label>
           <span className="detailx__actions-rule" aria-hidden />
           <button type="button" className="btn btn--ghost" onClick={() => void exportAs('md')} disabled={exporting !== null}>{exporting === 'md' ? '导出中…' : '导出 MD'}</button>
           <button type="button" className="btn btn--ghost" onClick={() => void exportAs('pdf')} disabled={exporting !== null}>{exporting === 'pdf' ? '导出中…' : '导出 PDF'}</button>

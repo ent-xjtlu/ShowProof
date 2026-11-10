@@ -2142,3 +2142,21 @@
 .settings-panel {
   z-index: 61;
 }
+
+/* 详情页状态手动修正 */
+.detailx__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.detailx__status select {
+  padding: 4px 6px;
+  border: 1px solid var(--rule);
+  background: #fff;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+}
