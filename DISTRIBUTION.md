@@ -6,19 +6,24 @@
 
 ## 一、交付物
 
-| 平台 | 文件 | 大小 | SHA256 |
-| --- | --- | ---: | --- |
-| Linux x86_64 | `release/shizheng-intel-desk-0.1.0-linux-x86_64.AppImage` | 460 MB | `f48d29c398269c08755b0a9e1fe9cf86492ccc36a0879af11816e6893a062783` |
-| Linux amd64 | `release/shizheng-intel-desk-0.1.0-linux-amd64.deb` | 370 MB | `c983f4d36869b0cbd643998997b5fbb349c0f7ae5878026f977b6842e246e915` |
+| 平台 | Release 附件 |
+| --- | --- |
+| Linux x86_64 | `shizheng-intel-desk-0.1.0-linux-x86_64.AppImage` |
+| Debian / Ubuntu amd64 | `shizheng-intel-desk-0.1.0-linux-amd64.deb` |
+| Windows x64 | `shizheng-intel-desk-0.1.0-win-x64.exe` |
 
-Windows 安装包按你的要求由你在 Windows 主机上构建：
+每次发布的 SHA-256 校验值随安装包保存在同一 Release 的 `SHA256SUMS` 文件中。在 Windows 主机上也可以自行构建安装包。
 
 ```bash
-npm install
+npm ci --legacy-peer-deps
 npm run dist:win
 ```
 
 产物为 `release/shizheng-intel-desk-0.1.0-win-x64.exe`（NSIS，one-click，非 per-machine）。构建脚本会自动准备 Windows x64 Node 运行时与 Playwright Chromium。
+
+### CI 发布
+
+GitHub Actions 工作流位于 `.github/workflows/desktop-release.yml`。推送 `v*` 标签后，Linux 和 Windows runner 会并行构建安装包，随后把产物发布到对应的 GitHub Release。手动运行工作流只保留构建产物，适合先检查包内容。
 
 ## 二、安装与首次启动
 

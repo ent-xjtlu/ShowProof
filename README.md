@@ -255,6 +255,18 @@ npm run dist:win
 - `shizheng-intel-desk-0.1.0-linux-amd64.deb`
 - Windows：`shizheng-intel-desk-0.1.0-win-x64.exe`
 
+### GitHub Actions 发布
+
+`.github/workflows/desktop-release.yml` 会在推送 `v*` 标签时并行构建 Linux 的 AppImage/deb 和 Windows 的 NSIS 安装包，然后自动创建或更新对应的 GitHub Release。手动运行 workflow 时只上传构建产物，不创建 Release。发布前先把 `package.json` 的版本更新为目标版本，再推送对应标签，例如：
+
+```bash
+npm version 0.1.1 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: release v0.1.1"
+git tag v0.1.1
+git push origin master v0.1.1
+```
+
 ### 安装版首次启动
 
 - 安装包**不包含任何账号、密码或模型密钥**；首次启动会进入「创建本机账号」。
