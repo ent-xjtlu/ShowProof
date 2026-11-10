@@ -1930,3 +1930,106 @@
 .md__table td:last-child {
   border-right: 0;
 }
+
+/* 帮助面板 */
+.help-panel {
+  width: min(660px, calc(100vw - 24px));
+}
+
+.help-steps {
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  background: var(--surface-lift);
+}
+
+.help-steps__title {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.help-steps ol {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.help-examples {
+  display: grid;
+  gap: 10px;
+}
+
+.help-example {
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  background: #fff;
+}
+
+.help-example__head h3 {
+  margin: 0 0 3px;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.help-example__note {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.help-example__prompt {
+  margin: 9px 0 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--copper);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.help-example__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.help-example__actions .btn {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.help-faq {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.help-faq dt {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.help-faq dd {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.help-kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.6;
+}

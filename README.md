@@ -42,6 +42,8 @@ npm run dev
 
 首次打开创建本机账号；登录后在右上角「连接设置」选择 DeepSeek 或自定义 API（Chat Completions / Anthropic Messages / Responses），填写企业画像后开始检索。
 
+顶栏「帮助」内置 8 个可直接填入对话的示例（加展会、改展会、归档/恢复、查资料、企查查核验、生成报告、导出 PDF），并附快捷键与常见问题。
+
 ### 桌面开发
 
 ```bash

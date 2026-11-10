@@ -11,6 +11,8 @@ interface Props {
   active: ChatSession | null
   busy: boolean
   error?: string | null
+  seed?: string | null
+  onSeedUsed?: () => void
   onSelect: (id: string) => void
   onCreate: () => void
   onSend: (text: string) => void
@@ -18,7 +20,7 @@ interface Props {
   onDelete: (id: string) => void
 }
 
-export function ChatView({ chats, active, busy, error, onSelect, onCreate, onSend, onCancel, onDelete }: Props) {
+export function ChatView({ chats, active, busy, error, seed, onSeedUsed, onSelect, onCreate, onSend, onCancel, onDelete }: Props) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<WorkspaceFile[]>([])
   const [approvals, setApprovals] = useState<ApprovalItem[]>([])
@@ -56,6 +58,13 @@ export function ChatView({ chats, active, busy, error, onSelect, onCreate, onSen
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [active?.messages.length, active?.status])
+
+  useEffect(() => {
+    if (!seed) return
+    setText(seed)
+    onSeedUsed?.()
+    areaRef.current?.focus()
+  }, [seed, onSeedUsed])
 
   const send = () => {
     const value = text.trim()

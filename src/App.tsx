@@ -5,6 +5,7 @@ import { chatApi } from './lib/chatApi'
 import { TopBar } from './components/TopBar'
 import { LoginScreen } from './components/LoginScreen'
 import { SettingsPanel } from './components/SettingsPanel'
+import { HelpPanel } from './components/HelpPanel'
 import { CompanyForm } from './components/CompanyForm'
 import { ExhibitionList } from './components/ExhibitionList'
 import { ExhibitionDetail } from './components/ExhibitionDetail'
@@ -33,6 +34,8 @@ export default function App() {
   const [discoveryId, setDiscoveryId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [seedText, setSeedText] = useState<string | null>(null)
   const [mode, setMode] = useState<'exhibition' | 'chat'>('exhibition')
   const [chats, setChats] = useState<ChatSession[]>([])
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
@@ -442,6 +445,7 @@ export default function App() {
         mode={mode}
         onModeChange={(next) => { setMode(next); if (next === 'chat' && !chats.length) void chatApi.list().then(setChats).catch(() => undefined) }}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenHelp={() => setHelpOpen(true)}
         onLogout={() => void logout()}
       />
 
@@ -452,6 +456,8 @@ export default function App() {
             active={activeChat}
             busy={Boolean(chatBusy)}
             error={chatError}
+            seed={seedText}
+            onSeedUsed={() => setSeedText(null)}
             onSelect={(id) => { setActiveChatId(id); setChatError(null) }}
             onCreate={() => void createChat()}
             onSend={(text) => void sendChat(text)}
@@ -548,6 +554,23 @@ export default function App() {
       )}
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <HelpPanel
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        onUse={async (text) => {
+          setHelpOpen(false)
+          setMode('chat')
+          if (!activeChat) {
+            try {
+              const { chat } = await chatApi.create()
+              mergeChat(chat)
+              setActiveChatId(chat.id)
+            } catch { /* 示例仍会填入，用户可手动新建 */ }
+          }
+          setSeedText(text)
+          if (!chats.length) void chatApi.list().then(setChats).catch(() => undefined)
+        }}
+      />
 
       {toast && (
         <div className="toast" data-error={toastError || undefined} role="status">
