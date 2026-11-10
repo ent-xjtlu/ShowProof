@@ -20,7 +20,8 @@ async function waitForHealth() {
 
 test.before(async () => {
   fs.rmSync(testDataDir, { recursive: true, force: true });
-  child = spawn('npx', ['tsx', 'server/index.ts'], { env: { ...process.env, PORT: String(port), DATA_DIR: testDataDir, DEEPSEEK_HARNESS_COMMAND: '', DEEPSEEK_API_KEY: '' }, stdio: 'ignore' });
+  const tsxCli = path.resolve('node_modules/tsx/dist/cli.mjs');
+  child = spawn(process.execPath, [tsxCli, 'server/index.ts'], { env: { ...process.env, PORT: String(port), DATA_DIR: testDataDir, DEEPSEEK_HARNESS_COMMAND: '', DEEPSEEK_API_KEY: '' }, stdio: 'ignore' });
   await waitForHealth();
   const setup = await fetch(`http://localhost:${port}/api/auth/setup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Test analyst', email: 'test@example.com', password: 'test-password-123' }) });
   assert.equal(setup.status, 201);
