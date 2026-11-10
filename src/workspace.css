@@ -1725,3 +1725,208 @@
   color: var(--muted);
   font-size: 11px;
 }
+
+/* 对话右侧：文件与审核（Agent 产物） */
+.chatpane__main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.chatpane__main .chatpane__scroll {
+  min-width: 0;
+}
+
+.chatfiles {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.chatfiles__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.chatfiles__refresh {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.chatfiles__empty {
+  margin: 0;
+  padding: 16px;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chatfiles__list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.chatfiles__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px;
+  border-bottom: 1px dashed var(--rule);
+}
+
+.chatfiles__meta {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatfiles__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatfiles__sub {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.chatfiles__dl {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.approval {
+  margin: 10px;
+  padding: 10px;
+  border: 1px solid var(--copper);
+  background: rgba(176, 106, 60, 0.06);
+}
+
+.approval__title {
+  margin: 0 0 6px;
+  color: var(--copper);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.approval__item + .approval__item {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--rule);
+}
+
+.approval__companies {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.approval__note {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.approval__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.approval__actions .btn {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+  .chatfiles {
+    width: 230px;
+  }
+}
+
+@media (max-width: 860px) {
+  .chatfiles {
+    display: none;
+  }
+}
+
+.settings-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.settings-check input {
+  margin-top: 3px;
+}
+
+.card__origin {
+  padding: 1px 6px;
+  border: 1px solid var(--copper);
+  color: var(--copper);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
+.md__table {
+  max-width: 100%;
+  margin: 10px 0;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+}
+
+.md__table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.md__table th,
+.md__table td {
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--rule);
+  border-right: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md__table th {
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.md__table tr:last-child td {
+  border-bottom: 0;
+}
+
+.md__table th:last-child,
+.md__table td:last-child {
+  border-right: 0;
+}

@@ -123,6 +123,7 @@ export function ExhibitionList({ exhibitions, busyIds, discovering, bulk, staleW
                 <button type="button" className="card__main" onClick={() => onOpen(item.id)}>
                   <div className="card__top">
                     <span className="card__status mono" data-status={item.status}>{STATUS_LABELS[item.status]}</span>
+                    {item.origin === 'agent' && <span className="card__origin mono">Agent 添加</span>}
                     {item.status === 'ready' ? (
                       <span className="card__verdict" data-verdict={item.verdict}>{VERDICT_LABELS[item.verdict]}</span>
                     ) : (

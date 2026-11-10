@@ -65,3 +65,6 @@ scratch/
 
 # 研究过程临时目录（不要提交）
 .tmp*/
+
+# Agent 测试数据目录
+tests/.tmp-agent-data/

@@ -53,13 +53,36 @@ type IntegrationSettings = {
   qccApiKey?: string;
   qccServers?: string;
   mineruApiKey?: string;
+  /** 允许 Agent 读取/增删改展会目录；默认开启。 */
+  agentCatalog?: boolean;
   updatedAt?: string;
+};
+type AgentGrant = {
+  userId: string;
+  chatId: string;
+  scopes: Set<string>;
+  expiresAt: number;
+};
+type Approval = {
+  id: string;
+  userId: string;
+  chatId: string;
+  kind: 'qcc';
+  companies: string[];
+  status: 'pending' | 'approved' | 'rejected' | 'running' | 'done' | 'failed' | 'expired';
+  note?: string;
+  error?: string;
+  resultPath?: string;
+  createdAt: string;
+  decidedAt?: string;
 };
 type ChatEntry = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;
   at: string;
+  /** 系统继续对话用的内部消息，不在界面上展示。 */
+  internal?: boolean;
   trace?: { label: string; detail?: string; at: string }[];
 };
 type ChatSession = {
@@ -83,11 +106,14 @@ type Db = {
   discoveries: Discovery[];
   exhibitions: Exhibition[];
   chats: ChatSession[];
+  approvals: Approval[];
+  /** 本地生成的下载签名密钥，用于让下载链接可直接在浏览器打开。 */
+  downloadSecret?: string;
 };
 
 function readDb(): Db {
   if (!fs.existsSync(dbPath)) {
-    const initial: Db = { users: [], sessions: {}, researches: [], settings: {}, companies: [], discoveries: [], exhibitions: [], chats: [] };
+    const initial: Db = { users: [], sessions: {}, researches: [], settings: {}, companies: [], discoveries: [], exhibitions: [], chats: [], approvals: [] };
     fs.writeFileSync(dbPath, JSON.stringify(initial, null, 2));
     return initial;
   }
@@ -98,6 +124,8 @@ function readDb(): Db {
   loaded.discoveries ||= [];
   loaded.exhibitions ||= [];
   loaded.chats ||= [];
+  loaded.approvals ||= [];
+  if (!loaded.downloadSecret) loaded.downloadSecret = crypto.randomBytes(24).toString('hex');
   loaded.researches.forEach((research) => {
     research.messages ||= [];
     const finalAssistant = [...research.messages].reverse().find((message) => message.role === 'assistant' && message.status === 'completed' && message.text?.trim());
@@ -112,6 +140,7 @@ function readDb(): Db {
 }
 function writeDb(db: Db) { fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), { mode: 0o600 }); try { fs.chmodSync(dbPath, 0o600); } catch { /* best effort on non-POSIX filesystems */ } }
 let db = readDb();
+if (!db.downloadSecret) { db.downloadSecret = crypto.randomBytes(24).toString('hex'); writeDb(db); }
 const now = () => new Date().toISOString();
 
 // 进程重启后，遗留的 running/researching 状态没有执行者，标记为中断以免界面永久转圈。
@@ -131,6 +160,12 @@ const now = () => new Date().toISOString();
     chat.status = 'failed';
     chat.error = '应用已重启，对话中断，请重新发送。';
     chat.updatedAt = now();
+    recovered = true;
+  }
+  for (const approval of db.approvals) {
+    if (approval.status !== 'pending' && approval.status !== 'running') continue;
+    approval.status = 'expired';
+    approval.error = '应用已重启，审批失效，请重新发起。';
     recovered = true;
   }
   for (const exhibition of db.exhibitions) {
@@ -206,8 +241,164 @@ function getIntegrationSettings(userId: string): IntegrationSettings {
     qccApiKey: normalizeSecret(stored.qccApiKey || process.env.QCC_MCP_API_KEY),
     qccServers: stored.qccServers || process.env.QCC_MCP_SERVERS,
     mineruApiKey: normalizeSecret(stored.mineruApiKey || process.env.MINERU_API_TOKEN),
+    agentCatalog: stored.agentCatalog !== false,
     updatedAt: stored.updatedAt,
   };
+}
+
+/* ==========================================================================
+   Agent 运行时：一次性令牌、按对话隔离的工作区、文件与审批。
+   Agent 通过令牌调用 /api/agent/*，不接触 db.json、密钥或其他用户数据。
+   ========================================================================== */
+
+const agentGrants = new Map<string, AgentGrant>();
+const agentWorkspacesRoot = path.join(dataDir, 'agent-workspaces');
+const appUrl = process.env.SHIZHENG_APP_URL || `http://127.0.0.1:${process.env.PORT || 8787}`;
+const agentMcpScript = process.env.SHIZHENG_AGENT_MCP_SCRIPT || path.join(rootDir, 'server/agent-mcp.mjs');
+
+function downloadHash(chatId: string, relative: string, kind: 'file' | 'pdf'): string {
+  return crypto.createHash('sha256').update(`${db.downloadSecret || ''}:${kind}:${chatId}:${relative}`).digest('hex').slice(0, 32);
+}
+
+function downloadUrl(chatId: string, relative: string, kind: 'file' | 'pdf' = 'file'): string {
+  const base = kind === 'pdf' ? `/api/chats/${chatId}/files/report.pdf` : `/api/chats/${chatId}/files/download`;
+  return `${base}?path=${encodeURIComponent(relative)}&h=${downloadHash(chatId, relative, kind)}`;
+}
+
+function verifyDownload(req: Request, chatId: string, kind: 'file' | 'pdf'): boolean {
+  const provided = String(req.query.h || '');
+  if (!provided) return false;
+  const expected = downloadHash(chatId, String(req.query.path || ''), kind);
+  return provided.length === expected.length && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+/** 企查查核验完成后，待继续的对话消息（异步，不阻塞审核动作）。 */
+const chatContinuations = new Map<string, string>();
+
+function chatWorkspace(chatId: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(chatId)) throw new ApcError('INVALID_CHAT_ID', '对话 ID 无效。');
+  const dir = path.join(agentWorkspacesRoot, chatId);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function issueAgentGrant(userId: string, chatId: string): string {
+  const token = crypto.randomBytes(24).toString('hex');
+  agentGrants.set(token, {
+    userId,
+    chatId,
+    scopes: new Set(['catalog:read', 'catalog:write', 'file:write', 'qcc:request']),
+    expiresAt: Date.now() + 2 * 60 * 60 * 1000,
+  });
+  for (const [key, grant] of agentGrants) {
+    if (grant.expiresAt <= Date.now()) agentGrants.delete(key);
+  }
+  return token;
+}
+
+function requireAgentGrant(req: Request, res: Response, scope: string): AgentGrant | undefined {
+  const token = String(req.headers['x-shizheng-agent-token'] || '');
+  const grant = token ? agentGrants.get(token) : undefined;
+  if (!grant || grant.expiresAt <= Date.now() || !grant.scopes.has(scope)) {
+    res.status(401).json({ error: 'AGENT_UNAUTHORIZED', message: 'Agent 调用令牌无效或已过期。' });
+    return undefined;
+  }
+  return grant;
+}
+
+function listWorkspaceFiles(chatId: string): { path: string; name: string; size: number; updatedAt: string }[] {
+  const root = chatWorkspace(chatId);
+  const files: { path: string; name: string; size: number; updatedAt: string }[] = [];
+  const walk = (directory: string, depth: number) => {
+    if (depth > 4 || files.length >= 200) return;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) { walk(absolute, depth + 1); continue; }
+      if (!entry.isFile()) continue;
+      const stat = fs.statSync(absolute);
+      files.push({ path: path.relative(root, absolute).split(path.sep).join('/'), name: entry.name, size: stat.size, updatedAt: stat.mtime.toISOString() });
+      if (files.length >= 200) return;
+    }
+  };
+  walk(root, 0);
+  return files.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function resolveWorkspaceFile(chatId: string, relative: unknown): string | undefined {
+  const requested = typeof relative === 'string' ? relative.trim() : '';
+  if (!requested || requested.includes('\0')) return undefined;
+  const root = chatWorkspace(chatId);
+  const absolute = path.resolve(root, requested);
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  if (!absolute.startsWith(prefix)) return undefined;
+  return absolute;
+}
+
+function writeWorkspaceFile(chatId: string, relative: string, content: string): { path: string; bytes: number } {
+  const clean = relative.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!clean || clean.split('/').some((part) => !part || part === '..' || part === '.')) throw new ApcError('INVALID_FILE_PATH', '文件路径无效。');
+  const absolute = resolveWorkspaceFile(chatId, clean);
+  if (!absolute) throw new ApcError('INVALID_FILE_PATH', '文件路径必须位于本次对话的工作区内。');
+  fs.mkdirSync(path.dirname(absolute), { recursive: true });
+  const bytes = Buffer.byteLength(content, 'utf8');
+  fs.writeFileSync(absolute, content);
+  return { path: clean, bytes };
+}
+
+function validateReport(title: string, markdown: string): string[] {
+  const issues: string[] = [];
+  if (!title.trim()) issues.push('报告缺少标题。');
+  if (markdown.trim().length < 300) issues.push('报告正文过短（至少 300 字）。');
+  if (!/https?:\/\//i.test(markdown) && !/mcp:\/\//i.test(markdown)) issues.push('报告至少需要 1 条可核验的来源链接。');
+  if (/TODO|待补充|占位符|xxx/i.test(markdown)) issues.push('报告仍含占位内容，请补充完整。');
+  return issues;
+}
+
+function createApproval(userId: string, chatId: string, companies: string[]): Approval {
+  const approval: Approval = {
+    id: id('apr'),
+    userId,
+    chatId,
+    kind: 'qcc',
+    companies: companies.slice(0, 5),
+    status: 'pending',
+    createdAt: now(),
+  };
+  db.approvals.push(approval);
+  flushDb(true);
+  return approval;
+}
+
+/**
+ * 审批完成后的对话续跑：不在 HTTP 请求里等待，也不阻塞用户操作。
+ * 若对话正忙，先排队，等当前轮结束再自动继续。
+ */
+function queueChatContinuation(chatId: string, text: string) {
+  const chat = db.chats.find((item) => item.id === chatId);
+  if (!chat) return;
+  if (chat.status === 'running') {
+    chatContinuations.set(chatId, text);
+    return;
+  }
+  startChatContinuation(chat, text);
+}
+
+function startChatContinuation(chat: ChatSession, text: string) {
+  chat.messages.push({ id: id('msg'), role: 'user', text, at: now(), internal: true });
+  chat.status = 'running';
+  chat.error = undefined;
+  chat.updatedAt = now();
+  flushDb(true);
+  void runChat(chat.id);
+}
+
+function drainChatContinuations(chatId: string) {
+  const pending = chatContinuations.get(chatId);
+  if (!pending) return;
+  chatContinuations.delete(chatId);
+  const chat = db.chats.find((item) => item.id === chatId);
+  if (!chat) return;
+  startChatContinuation(chat, pending);
 }
 
 function currentUser(req: Request): User | undefined {
@@ -238,8 +429,16 @@ class DeepSeekAcpBridge {
   private buffer = '';
   private listeners: ((msg: RpcMessage) => void)[] = [];
   private initialized = false;
+  private grantToken?: string;
 
-  constructor(private cwd: string, private userId: string, private variant: 'exhibition' | 'chat' = 'exhibition') {}
+  constructor(private cwd: string, private userId: string, private variant: 'exhibition' | 'chat' = 'exhibition', private chatId?: string) {}
+
+  /** 对话会话的令牌按需签发；一个桥接实例对应一个对话。 */
+  private agentToken(): string | undefined {
+    if (this.variant !== 'chat' || !this.chatId) return undefined;
+    if (!this.grantToken) this.grantToken = issueAgentGrant(this.userId, this.chatId);
+    return this.grantToken;
+  }
 
   private getCommand(settings: IntegrationSettings) {
     const command = process.env.DEEPSEEK_HARNESS_COMMAND || process.execPath;
@@ -283,8 +482,36 @@ class DeepSeekAcpBridge {
     while (index >= 0) {
       const line = this.buffer.slice(0, index).trim(); this.buffer = this.buffer.slice(index + 1); index = this.buffer.indexOf('\n');
       if (!line) continue;
-      try { const msg = JSON.parse(line) as RpcMessage; if (typeof msg.id === 'number' && (msg.result !== undefined || msg.error !== undefined)) { const item = this.pending.get(msg.id); if (!item) continue; this.pending.delete(msg.id); msg.error ? item.reject(new Error(msg.error.message || 'ACP error')) : item.resolve(msg.result); } else this.listeners.forEach((listener) => listener(msg)); } catch { /* stdout is protocol-only; malformed lines are ignored until request timeout */ }
+      try {
+        const msg = JSON.parse(line) as RpcMessage;
+        if (typeof msg.method === 'string') {
+          // ACP 服务端也会向客户端发请求（例如 session/request_permission）。
+          // 必须应答，否则写文件/执行命令会一直挂起直到超时。
+          if (typeof msg.id === 'number') this.respondRequest(msg);
+          else this.listeners.forEach((listener) => listener(msg));
+          continue;
+        }
+        if (typeof msg.id === 'number' && (msg.result !== undefined || msg.error !== undefined)) {
+          const item = this.pending.get(msg.id);
+          if (!item) continue;
+          this.pending.delete(msg.id);
+          msg.error ? item.reject(new Error(msg.error.message || 'ACP error')) : item.resolve(msg.result);
+        }
+      } catch { /* stdout is protocol-only; malformed lines are ignored until request timeout */ }
     }
+  }
+  private respondRequest(msg: RpcMessage) {
+    const method = String(msg.method);
+    if (method === 'session/request_permission') {
+      const allow = this.variant === 'chat';
+      this.child?.stdin.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: { outcome: { outcome: 'selected', optionId: allow ? 'allow-once' : 'reject-once' } },
+      }) + '\n');
+      return;
+    }
+    this.child?.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `Unsupported client method: ${method}` } }) + '\n');
   }
   private failAll(error: Error) { for (const [requestId, item] of this.pending) { item.reject(error); this.pending.delete(requestId); } }
   private request(method: string, params: any): Promise<any> {
@@ -328,7 +555,14 @@ class DeepSeekAcpBridge {
     }
     let sessionId = existingSessionId;
     if (!sessionId) {
-      const session = await this.request('session/new', { cwd: this.cwd, mcpServers: [] });
+      const settings = getIntegrationSettings(this.userId);
+      const mcpServers = buildMcpServers(settings, {
+        includeCatalog: settings.agentCatalog !== false,
+        agentToken: this.agentToken(),
+        chatId: this.chatId,
+        includeQcc: false,
+      });
+      const session = await this.request('session/new', { cwd: this.cwd, mcpServers });
       sessionId = String(session.sessionId);
     }
     const updates: RpcMessage[] = [];
@@ -389,7 +623,7 @@ const qccHttpServers = [
   ['qcc-history', 'history'], ['qcc-executive', 'executive'], ['qcc-legal-regulation', 'regulation'],
   ['qcc-legal-case', 'case'], ['qcc-tender', 'tender'], ['qcc-document', 'document']
 ] as const;
-function buildMcpServers(settings?: IntegrationSettings) {
+function buildMcpServers(settings?: IntegrationSettings, options?: { includeCatalog?: boolean; agentToken?: string; chatId?: string; includeQcc?: boolean }) {
   const playwrightCommand = process.env.DEEPSEEK_HARNESS_COMMAND || process.execPath;
   const playwrightScript = process.env.PLAYWRIGHT_MCP_SCRIPT || path.join(rootDir, 'server/playwright-mcp.mjs');
   const playwrightBrowserPath = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(rootDir, 'build/playwright-browsers');
@@ -408,6 +642,22 @@ function buildMcpServers(settings?: IntegrationSettings) {
       ...(settings?.mineruApiKey || process.env.MINERU_API_TOKEN ? [{ name: 'MINERU_API_TOKEN', value: settings?.mineruApiKey || process.env.MINERU_API_TOKEN || '' }] : []),
     ],
   }];
+  // 应用内工具：让 Harness 能读写展会目录、生成可下载文件与报告。
+  if (options?.includeCatalog && options.agentToken) {
+    servers.push({
+      name: 'shizheng',
+      command: playwrightCommand,
+      args: [agentMcpScript],
+      env: [
+        { name: 'SHIZHENG_APP_URL', value: appUrl },
+        { name: 'SHIZHENG_AGENT_TOKEN', value: options.agentToken },
+        { name: 'SHIZHENG_CHAT_ID', value: options.chatId || '' },
+      ],
+    });
+  }
+  // 对话会话不直接挂载企查查：必须经过 shizheng_qcc_verify 的用户审核，
+  // 由审核后的专用会话调用 QCC MCP，避免绕过审核。
+  if (options?.includeQcc === false) return servers;
   const command = process.env.QCC_MCP_COMMAND;
   const args = process.env.QCC_MCP_ARGS ? JSON.parse(process.env.QCC_MCP_ARGS) as string[] : [];
   const url = process.env.QCC_MCP_URL;
@@ -418,7 +668,11 @@ function buildMcpServers(settings?: IntegrationSettings) {
     return [...servers, ...Object.entries(configured).filter(([, config]) => config.url).map(([name, config]) => ({ name, type: 'http', url: config.url, headers: { ...(config.headers || {}), ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) } }))];
   }
   if (apiKey) return [...servers, ...qccHttpServers.map(([name, server]) => ({ name, type: 'http', url: `https://agent.qcc.com/mcp/${server}/stream`, headers: { Authorization: `Bearer ${apiKey}` } }))];
-  if (command) return [...servers, { name: 'qcc', command, args, env: process.env.QCC_MCP_ENV ? JSON.parse(process.env.QCC_MCP_ENV) : {} }];
+  if (command) {
+    const envObject = process.env.QCC_MCP_ENV ? JSON.parse(process.env.QCC_MCP_ENV) as Record<string, unknown> : {};
+    const env = Object.entries(envObject).map(([name, value]) => ({ name, value: String(value) }));
+    return [...servers, { name: 'qcc', command, args, env }];
+  }
   if (url) return [...servers, { name: 'qcc', type: 'http', url, headers: process.env.QCC_MCP_HEADERS ? JSON.parse(process.env.QCC_MCP_HEADERS) : {} }];
   return servers;
 }
@@ -547,6 +801,7 @@ app.get('/api/integrations', requireUser, (req, res) => {
     customApi: settings.customApi ? { configured: true, protocol: settings.customApi.protocol, baseUrl: settings.customApi.baseUrl, model: settings.customApi.model } : { configured: false },
     qccMcp: { configured: Boolean(settings.qccApiKey || settings.qccServers || process.env.QCC_MCP_URL || process.env.QCC_MCP_COMMAND), mode: settings.qccServers ? 'custom MCP servers' : 'QCC Streamable HTTP' },
     mineru: { configured: Boolean(settings.mineruApiKey), mode: 'MinerU document parsing' },
+    agent: { catalogEnabled: settings.agentCatalog !== false, workspaceMode: 'per-chat' },
     updatedAt: settings.updatedAt || null,
   });
 });
@@ -562,6 +817,7 @@ app.put('/api/integrations', requireUser, (req, res) => {
   const qccApiKey = normalizeSecret(typeof req.body?.qccApiKey === 'string' ? req.body.qccApiKey : '');
   const qccServers = typeof req.body?.qccServers === 'string' ? req.body.qccServers.trim() : '';
   const mineruApiKey = normalizeSecret(typeof req.body?.mineruApiKey === 'string' ? req.body.mineruApiKey : '');
+  const agentCatalog = typeof req.body?.agentCatalog === 'boolean' ? req.body.agentCatalog : previous.agentCatalog !== false;
   if (qccServers) {
     try { const parsed = JSON.parse(qccServers); if (!parsed || typeof parsed !== 'object') throw new Error('invalid'); }
     catch { return res.status(400).json({ error: 'INVALID_QCC_SERVERS', message: '企查查 MCP Server 配置必须是有效 JSON。' }); }
@@ -574,6 +830,7 @@ app.put('/api/integrations', requireUser, (req, res) => {
     qccApiKey: qccApiKey || previous.qccApiKey,
     qccServers: qccServers || previous.qccServers,
     mineruApiKey: mineruApiKey || previous.mineruApiKey,
+    agentCatalog,
     updatedAt: now(),
   };
   writeDb(db);
@@ -687,6 +944,139 @@ const clampNumber = (value: unknown, min: number, max: number, fallback: number)
   const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed * 100) / 100)) : fallback;
 };
+
+const asIsoDate = (value: unknown): string | undefined => {
+  const text = asText(value, 40);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return undefined;
+  return Number.isNaN(Date.parse(`${text}T00:00:00Z`)) ? undefined : text;
+};
+
+function blankProfile(userId: string): CompanyProfile {
+  return {
+    id: '',
+    userId,
+    name: '',
+    description: '',
+    products: [],
+    customers: [],
+    industry: '',
+    targetMarkets: [],
+    filters: { countries: [], years: [], industries: [], scale: 'any', purpose: 'any' },
+    cost: DEFAULT_COST,
+    createdAt: now(),
+    updatedAt: now(),
+  };
+}
+
+function agentExhibitionSources(body: any): Exhibition['sources'] {
+  const urls = asList(body?.sourceUrls, 8).filter((url) => /^https?:\/\//i.test(url));
+  return urls.map((url) => ({
+    id: id('ev'),
+    title: url.slice(0, 120),
+    url,
+    type: 'web',
+    capturedAt: now(),
+    excerpt: '',
+    status: 'pending' as const,
+  }));
+}
+
+/** Agent 新建展会：查重 + 复用评分/费用/结论模型，来源标记为 agent。 */
+function createAgentExhibition(userId: string, body: any): { exhibition: Exhibition; duplicate: boolean } {
+  const name = asText(body?.name, 120);
+  if (!name) throw new ApcError('EXHIBITION_NAME_REQUIRED', '请提供展会名称。');
+  const city = asText(body?.city, 80) || '待确认';
+  const country = asText(body?.country, 80) || '待确认';
+  const startDate = asIsoDate(body?.startDate);
+  const endDate = asIsoDate(body?.endDate);
+  const year = (startDate || endDate || '').slice(0, 4);
+  const normalizeName = (value: string) => value
+    .toLowerCase()
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .replace(/第[0-9一二三四五六七八九十百]+届/g, '')
+    .replace(/20\d{2}/g, '')
+    .replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+  const normalized = normalizeName(name);
+  const duplicate = db.exhibitions.find((item) => item.userId === userId && !item.archivedAt
+    && (!year || !item.startDate || item.startDate.slice(0, 4) === year)
+    && (normalizeName(item.name) === normalized || (normalized.length >= 4 && normalizeName(item.name).includes(normalized))));
+  if (duplicate) return { exhibition: duplicate, duplicate: true };
+
+  const profile = companyProfileOf(userId) || blankProfile(userId);
+  const counts = computeCounts([]);
+  const fitScore = clampNumber(body?.fitScore, 0, 100, 60);
+  const score = scoreExhibition(fitScore, counts);
+  const publicFees: PublicFee[] = [];
+  const record: Exhibition = {
+    id: id('exh'),
+    userId,
+    discoveryId: 'agent',
+    status: 'queued',
+    name,
+    type: asText(body?.type, 80) || undefined,
+    startDate,
+    endDate,
+    city,
+    country,
+    venue: asText(body?.venue, 160) || undefined,
+    organizer: asText(body?.organizer, 160) || undefined,
+    theme: asText(body?.theme, 400) || undefined,
+    exhibitScope: asText(body?.exhibitScope, 800) || undefined,
+    website: asText(body?.website, 300) || undefined,
+    fitScore,
+    fitReasons: asList(body?.fitReasons, 12),
+    mismatchReasons: [],
+    exhibitors: [],
+    counts,
+    score,
+    verdict: deriveVerdict(score, counts),
+    verdictReason: '由 Agent 加入目录，参展企业尚未调查。',
+    actionPlan: [],
+    publicFees,
+    cost: estimateCosts(profile, { country, city, startDate, endDate, publicFees }),
+    sources: agentExhibitionSources(body),
+    watched: false,
+    changes: [],
+    origin: 'agent',
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  db.exhibitions.push(record);
+  return { exhibition: record, duplicate: false };
+}
+
+/** Agent 更新展会：白名单字段 + 重新计算评分与费用。 */
+function updateAgentExhibition(exhibition: Exhibition, body: any): Exhibition {
+  const patch = body?.patch && typeof body.patch === 'object' ? body.patch : body;
+  const textFields: [keyof Exhibition, number][] = [
+    ['name', 120], ['type', 80], ['city', 80], ['country', 80], ['venue', 160],
+    ['organizer', 160], ['theme', 400], ['exhibitScope', 800], ['participation', 200],
+    ['website', 300], ['registrationDeadline', 40],
+  ];
+  for (const [field, max] of textFields) {
+    if (!(field in patch)) continue;
+    const value = asText((patch as any)[field], max);
+    if (field === 'name' && !value) throw new ApcError('EXHIBITION_NAME_REQUIRED', '展会名称不能为空。');
+    if (field === 'registrationDeadline') {
+      (exhibition as any)[field] = asIsoDate(value) || undefined;
+    } else {
+      (exhibition as any)[field] = value || undefined;
+    }
+  }
+  if ('startDate' in patch) exhibition.startDate = asIsoDate((patch as any).startDate);
+  if ('endDate' in patch) exhibition.endDate = asIsoDate((patch as any).endDate);
+  if ('fitScore' in patch) exhibition.fitScore = clampNumber((patch as any).fitScore, 0, 100, exhibition.fitScore);
+  if ('fitReasons' in patch) exhibition.fitReasons = asList((patch as any).fitReasons, 12);
+  if ('mismatchReasons' in patch) exhibition.mismatchReasons = asList((patch as any).mismatchReasons, 12);
+  if ('watched' in patch) exhibition.watched = Boolean((patch as any).watched);
+  if ('note' in patch) exhibition.agentNote = asText((patch as any).note, 1000) || undefined;
+  exhibition.score = scoreExhibition(exhibition.fitScore, exhibition.counts);
+  exhibition.verdict = deriveVerdict(exhibition.score, exhibition.counts);
+  exhibition.updatedAt = now();
+  const profile = companyProfileOf(exhibition.userId);
+  if (profile) exhibition.cost = estimateCosts(profile, exhibition);
+  return exhibition;
+}
 
 const companyProfileOf = (userId: string) => db.companies.find((item) => item.userId === userId);
 
@@ -1064,6 +1454,53 @@ function moneyText(value: number): string {
   return `¥${Math.round(value).toLocaleString('zh-CN')}`;
 }
 
+function markdownToPlainText(value: string): string {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1（$2）')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/[*~]/g, '')
+    .trim();
+}
+
+/** 把工作区里的 Markdown 报告渲染成 PDF（复用已打包的中文字体）。 */
+function sendMarkdownPdf(markdown: string, title: string, res: Response) {
+  const doc = new PDFDocument({ size: 'A4', margin: 48 }) as PdfDoc;
+  applyReportFont(doc);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="report.pdf"; filename*=UTF-8''${encodeURIComponent(`${title}.pdf`)}`);
+  doc.pipe(res);
+  doc.fontSize(17).fillColor('#111111').text(title, { width: 500 });
+  doc.moveDown(0.6);
+  for (const raw of markdown.split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) { doc.moveDown(0.45); continue; }
+    if (/^\s*(```|---|___)/.test(line)) { doc.moveDown(0.2); continue; }
+    if (/^\s*\|/.test(line)) {
+      const cells = line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((cell) => markdownToPlainText(cell));
+      if (cells.every((cell) => !cell || /^:?-{2,}:?$/.test(cell))) continue;
+      doc.fontSize(8.5).fillColor('#333333').text(cells.join('   '), { width: 500 });
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      doc.moveDown(level <= 2 ? 0.5 : 0.3);
+      doc.fontSize(level === 1 ? 15 : level === 2 ? 13 : 11).fillColor('#111111').text(markdownToPlainText(heading[2]), { width: 500 });
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (bullet) {
+      doc.fontSize(10).fillColor('#222222').text(`• ${markdownToPlainText(bullet[1])}`, { width: 476, indent: 14 });
+      continue;
+    }
+    doc.fontSize(10).fillColor('#222222').text(markdownToPlainText(line), { width: 500, lineGap: 2 });
+  }
+  doc.end();
+}
+
 function sendExhibitionPdf(exhibition: Exhibition, profile: CompanyProfile, res: Response) {
   const doc = new PDFDocument({ size: 'A4', margin: 48 }) as PdfDoc;
   applyReportFont(doc);
@@ -1216,7 +1653,11 @@ app.post('/api/discoveries/:id/cancel', requireUser, (req, res) => {
 
 app.get('/api/exhibitions', requireUser, (req, res) => {
   const user = (req as Request & { user: User }).user;
-  res.json(db.exhibitions.filter((item) => item.userId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(refreshCost));
+  const includeArchived = req.query.includeArchived === '1';
+  res.json(db.exhibitions
+    .filter((item) => item.userId === user.id && (includeArchived || !item.archivedAt))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .map(refreshCost));
 });
 
 app.get('/api/exhibitions/:id', requireUser, (req, res) => {
@@ -1319,6 +1760,315 @@ app.get('/api/exhibitions/:id/report.csv', requireUser, (req, res) => {
 });
 
 /* ==========================================================================
+   Agent 内部 API：展会目录读写、工作区文件、报告、企查查审批。
+   只接受 MCP 子进程携带的一次性令牌。
+   ========================================================================== */
+
+const agentExhibitionView = (item: Exhibition) => ({
+  id: item.id,
+  name: item.name,
+  type: item.type,
+  startDate: item.startDate,
+  endDate: item.endDate,
+  city: item.city,
+  country: item.country,
+  venue: item.venue,
+  organizer: item.organizer,
+  website: item.website,
+  status: item.status,
+  fitScore: item.fitScore,
+  score: item.score,
+  verdict: item.verdict,
+  origin: item.origin || 'discovery',
+  agentNote: item.agentNote,
+  archivedAt: item.archivedAt,
+  updatedAt: item.updatedAt,
+});
+
+app.get('/api/agent/context', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:read');
+  if (!grant) return;
+  const profile = companyProfileOf(grant.userId);
+  res.json({
+    profile: profile ? {
+      name: profile.name,
+      industry: profile.industry,
+      description: profile.description,
+      website: profile.website,
+      products: profile.products,
+      targetMarkets: profile.targetMarkets,
+    } : null,
+    exhibitionCount: db.exhibitions.filter((item) => item.userId === grant.userId && !item.archivedAt).length,
+    archivedCount: db.exhibitions.filter((item) => item.userId === grant.userId && item.archivedAt).length,
+    workspace: '本次对话工作区（相对路径）',
+    chatId: grant.chatId,
+  });
+});
+
+app.get('/api/agent/exhibitions', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:read');
+  if (!grant) return;
+  const query = String(req.query.query || '').trim().toLowerCase();
+  const status = String(req.query.status || '').trim();
+  const includeArchived = req.query.includeArchived === '1';
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+  const items = db.exhibitions
+    .filter((item) => item.userId === grant.userId)
+    .filter((item) => includeArchived || !item.archivedAt)
+    .filter((item) => !status || item.status === status)
+    .filter((item) => !query || `${item.name} ${item.city} ${item.country}`.toLowerCase().includes(query))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, limit)
+    .map(agentExhibitionView);
+  res.json({ total: items.length, exhibitions: items });
+});
+
+app.get('/api/agent/exhibitions/:id', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:read');
+  if (!grant) return;
+  const exhibition = db.exhibitions.find((item) => item.id === req.params.id && item.userId === grant.userId);
+  if (!exhibition) return res.status(404).json({ error: 'NOT_FOUND', message: '展会不存在。' });
+  res.json({ exhibition: { ...agentExhibitionView(exhibition), cost: refreshCost(exhibition).cost, sources: exhibition.sources, fitReasons: exhibition.fitReasons, mismatchReasons: exhibition.mismatchReasons, actionPlan: exhibition.actionPlan } });
+});
+
+app.post('/api/agent/exhibitions', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:write');
+  if (!grant) return;
+  try {
+    const { exhibition, duplicate } = createAgentExhibition(grant.userId, req.body || {});
+    flushDb(true);
+    res.status(duplicate ? 200 : 201).json({ duplicate, exhibition: agentExhibitionView(exhibition) });
+  } catch (error) {
+    const err = error as ApcError;
+    res.status(400).json({ error: err.code || 'INVALID_EXHIBITION', message: err.message });
+  }
+});
+
+app.patch('/api/agent/exhibitions/:id', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:write');
+  if (!grant) return;
+  const exhibition = db.exhibitions.find((item) => item.id === req.params.id && item.userId === grant.userId);
+  if (!exhibition) return res.status(404).json({ error: 'NOT_FOUND', message: '展会不存在。' });
+  try {
+    updateAgentExhibition(exhibition, req.body || {});
+    flushDb(true);
+    res.json({ exhibition: agentExhibitionView(exhibition) });
+  } catch (error) {
+    const err = error as ApcError;
+    res.status(400).json({ error: err.code || 'INVALID_EXHIBITION', message: err.message });
+  }
+});
+
+app.post('/api/agent/exhibitions/:id/archive', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:write');
+  if (!grant) return;
+  const exhibition = db.exhibitions.find((item) => item.id === req.params.id && item.userId === grant.userId);
+  if (!exhibition) return res.status(404).json({ error: 'NOT_FOUND', message: '展会不存在。' });
+  exhibition.archivedAt = now();
+  const reason = asText(req.body?.reason, 500);
+  if (reason) exhibition.changes.push({ at: now(), type: 'status', detail: `归档：${reason}` });
+  exhibition.updatedAt = now();
+  flushDb(true);
+  res.json({ ok: true, exhibition: agentExhibitionView(exhibition) });
+});
+
+app.post('/api/agent/exhibitions/:id/restore', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'catalog:write');
+  if (!grant) return;
+  const exhibition = db.exhibitions.find((item) => item.id === req.params.id && item.userId === grant.userId);
+  if (!exhibition) return res.status(404).json({ error: 'NOT_FOUND', message: '展会不存在。' });
+  delete exhibition.archivedAt;
+  exhibition.updatedAt = now();
+  flushDb(true);
+  res.json({ ok: true, exhibition: agentExhibitionView(exhibition) });
+});
+
+app.get('/api/agent/files', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'file:write');
+  if (!grant) return;
+  const files = listWorkspaceFiles(grant.chatId).map((file) => ({
+    ...file,
+    downloadUrl: downloadUrl(grant.chatId, file.path),
+  }));
+  res.json({ files });
+});
+
+app.post('/api/agent/files', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'file:write');
+  if (!grant) return;
+  const relative = asText(req.body?.path, 300);
+  const content = typeof req.body?.content === 'string' ? req.body.content : '';
+  if (Buffer.byteLength(content, 'utf8') > 5 * 1024 * 1024) return res.status(413).json({ error: 'FILE_TOO_LARGE', message: '单个文件不能超过 5 MB。' });
+  try {
+    const written = writeWorkspaceFile(grant.chatId, relative, content);
+    res.json({ ...written, downloadUrl: downloadUrl(grant.chatId, written.path) });
+  } catch (error) {
+    const err = error as ApcError;
+    res.status(400).json({ error: err.code || 'INVALID_FILE_PATH', message: err.message });
+  }
+});
+
+app.post('/api/agent/report', (req, res) => {
+  const grant = requireAgentGrant(req, res, 'file:write');
+  if (!grant) return;
+  const title = asText(req.body?.title, 160);
+  const markdown = typeof req.body?.markdown === 'string' ? req.body.markdown : '';
+  const issues = validateReport(title, markdown);
+  if (issues.length) return res.status(422).json({ error: 'REPORT_INVALID', message: issues.join(' '), issues });
+  const slug = (title || 'report').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'report';
+  const stamp = new Date().toISOString().slice(0, 10);
+  const preferred = asText(req.body?.filename, 120).replace(/[\/:*?"<>|]/g, '-') || `${slug}-${stamp}.md`;
+  let relative = `reports/${preferred.endsWith('.md') ? preferred : `${preferred}.md`}`;
+  let suffix = 2;
+  while (fs.existsSync(path.join(chatWorkspace(grant.chatId), relative))) {
+    relative = `reports/${preferred.replace(/\.md$/, '')}-${suffix}.md`;
+    suffix += 1;
+  }
+  try {
+    const written = writeWorkspaceFile(grant.chatId, relative, markdown);
+    res.status(201).json({ ...written, title, downloadUrl: downloadUrl(grant.chatId, written.path), pdfUrl: downloadUrl(grant.chatId, written.path, 'pdf') });
+  } catch (error) {
+    const err = error as ApcError;
+    res.status(400).json({ error: err.code || 'INVALID_FILE_PATH', message: err.message });
+  }
+});
+
+app.post('/api/agent/qcc/verify', async (req, res) => {
+  const grant = requireAgentGrant(req, res, 'qcc:request');
+  if (!grant) return;
+  try { requireQccConfig(grant.userId); } catch (error) { const err = error as ApcError; return res.status(503).json({ error: err.code, message: err.message }); }
+  const companies = Array.isArray(req.body?.companies)
+    ? req.body.companies.map((item: unknown) => asText(item, 120)).filter(Boolean).slice(0, 5)
+    : [asText(req.body?.company, 120)].filter(Boolean);
+  if (!companies.length) return res.status(400).json({ error: 'COMPANY_REQUIRED', message: '请提供要核验的企业名称。' });
+  const approval = createApproval(grant.userId, grant.chatId, companies);
+  res.status(202).json({
+    approvalId: approval.id,
+    status: 'pending',
+    companies: approval.companies,
+    message: '已提交给用户审核。不要重复提交；先向用户说明需要在界面上确认，审核通过后系统会自动核验并继续。',
+  });
+});
+
+// 仅测试环境：为已登录用户的指定对话签发一次性 Agent 令牌，供自动化测试使用。
+if (process.env.SHIZHENG_TEST_MODE === '1') {
+  app.post('/api/test/agent-grant', requireUser, (req, res) => {
+    const user = (req as Request & { user: User }).user;
+    const chatId = asText(req.body?.chatId, 80);
+    const chat = db.chats.find((item) => item.id === chatId && item.userId === user.id);
+    if (!chat) return res.status(404).json({ error: 'NOT_FOUND', message: '对话不存在。' });
+    res.json({ token: issueAgentGrant(user.id, chat.id) });
+  });
+}
+
+app.get('/api/chats/:id/files', requireUser, (req, res) => {
+  const chat = getChat(req, res);
+  if (!chat) return;
+  res.json({ files: listWorkspaceFiles(chat.id).map((file) => ({ ...file, downloadUrl: downloadUrl(chat.id, file.path), ...(file.name.endsWith('.md') ? { pdfUrl: downloadUrl(chat.id, file.path, 'pdf') } : {}) })) });
+});
+
+app.get('/api/chats/:id/files/download', (req, res) => {
+  const user = currentUser(req);
+  const chat = db.chats.find((item) => item.id === req.params.id);
+  if (!chat) return res.status(404).json({ error: 'NOT_FOUND', message: '对话不存在。' });
+  const owned = Boolean(user && chat.userId === user.id);
+  if (!owned && !verifyDownload(req, chat.id, 'file')) return res.status(401).json({ error: 'UNAUTHENTICATED', message: '请先登录，或使用带签名的下载链接。' });
+  const absolute = resolveWorkspaceFile(chat.id, req.query.path);
+  if (!absolute || !fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) return res.status(404).json({ error: 'FILE_NOT_FOUND', message: '文件不存在。' });
+  const name = path.basename(absolute);
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  const type = name.endsWith('.md') ? 'text/markdown; charset=utf-8'
+    : name.endsWith('.csv') ? 'text/csv; charset=utf-8'
+      : name.endsWith('.json') ? 'application/json; charset=utf-8'
+        : name.endsWith('.txt') ? 'text/plain; charset=utf-8'
+          : name.endsWith('.png') ? 'image/png'
+            : name.endsWith('.jpg') || name.endsWith('.jpeg') ? 'image/jpeg'
+              : 'application/octet-stream';
+  res.setHeader('Content-Type', type);
+  res.setHeader('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.setHeader('Content-Length', String(fs.statSync(absolute).size));
+  fs.createReadStream(absolute).pipe(res);
+});
+
+app.get('/api/chats/:id/files/report.pdf', (req, res) => {
+  const user = currentUser(req);
+  const chat = db.chats.find((item) => item.id === req.params.id);
+  if (!chat) return res.status(404).json({ error: 'NOT_FOUND', message: '对话不存在。' });
+  const owned = Boolean(user && chat.userId === user.id);
+  if (!owned && !verifyDownload(req, chat.id, 'pdf')) return res.status(401).json({ error: 'UNAUTHENTICATED', message: '请先登录，或使用带签名的下载链接。' });
+  const absolute = resolveWorkspaceFile(chat.id, req.query.path);
+  if (!absolute || !absolute.endsWith('.md') || !fs.existsSync(absolute)) return res.status(404).json({ error: 'FILE_NOT_FOUND', message: 'Markdown 报告不存在。' });
+  const markdown = fs.readFileSync(absolute, 'utf8');
+  const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(absolute, '.md');
+  sendMarkdownPdf(markdown, title, res);
+});
+
+app.get('/api/chats/:id/approvals', requireUser, (req, res) => {
+  const chat = getChat(req, res);
+  if (!chat) return;
+  res.json({ approvals: db.approvals.filter((item) => item.chatId === chat.id && item.status === 'pending') });
+});
+
+app.get('/api/approvals/:id', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  const approval = db.approvals.find((item) => item.id === req.params.id && item.userId === user.id);
+  if (!approval) return res.status(404).json({ error: 'NOT_FOUND', message: '审批请求不存在。' });
+  res.json({ approval });
+});
+
+app.post('/api/approvals/:id/decide', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  const approval = db.approvals.find((item) => item.id === req.params.id && item.userId === user.id);
+  if (!approval) return res.status(404).json({ error: 'NOT_FOUND', message: '审批请求不存在。' });
+  if (approval.status !== 'pending') return res.status(409).json({ error: 'ALREADY_DECIDED', message: '该请求已处理。' });
+  const decision = req.body?.decision;
+  if (decision !== 'approve' && decision !== 'reject') return res.status(400).json({ error: 'INVALID_DECISION', message: '请选择同意或拒绝。' });
+  approval.decidedAt = now();
+  const chat = db.chats.find((item) => item.id === approval.chatId);
+  if (decision === 'reject') {
+    approval.status = 'rejected';
+    chat?.messages.push({ id: id('msg'), role: 'system', text: '已跳过企查查核验。', at: now() });
+    if (chat) chat.updatedAt = now();
+    flushDb(true);
+    return res.json({ approval });
+  }
+  approval.status = 'approved';
+  chat?.messages.push({ id: id('msg'), role: 'system', text: '已同意企查查核验，正在调用企查查 MCP…', at: now() });
+  if (chat) chat.updatedAt = now();
+  flushDb(true);
+  void runQccApproval(approval);
+  res.json({ approval });
+});
+
+async function runQccApproval(approval: Approval) {
+  approval.status = 'running';
+  flushDb(true);
+  const bridge = new DeepSeekAcpBridge(rootDir, approval.userId);
+  try {
+    const companies = approval.companies.join('、');
+    const result = await withTimeout(bridge.run(`你是企业核验 Agent。请只使用已挂载的企查查 MCP 工具核验以下企业：${companies}。逐家列出：主体全称、统一社会信用代码、法定代表人、注册资本、成立日期、经营状态、注册地址、风险提示。找不到或存在多个同名主体时明确说明，不要猜测。最后用简体中文 Markdown 汇总，并保留可回溯的字段来源。`), 8 * 60 * 1000, '企查查核验超时');
+    const text = cleanFinalAgentText(result.finalText);
+    if (!text) throw new ApcError('QCC_EMPTY_RESULT', '企查查 MCP 未返回核验结果。');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const written = writeWorkspaceFile(approval.chatId, `qcc/verification-${stamp}.md`, `# 企查查核验\n\n企业：${companies}\n\n${text}\n`);
+    approval.status = 'done';
+    approval.resultPath = written.path;
+    approval.note = text.slice(0, 800);
+    const chat = db.chats.find((item) => item.id === approval.chatId);
+    chat?.messages.push({ id: id('msg'), role: 'system', text: `企查查核验完成，结果已保存：${written.path}`, at: now() });
+    flushDb(true);
+    queueChatContinuation(approval.chatId, `【企查查核验完成】结果已保存到工作区文件 ${written.path}。请读取该文件，把核验结论写入正式报告，并调用 shizheng_report_save 生成可供下载的最终报告。`);
+  } catch (error) {
+    approval.status = 'failed';
+    approval.error = error instanceof Error ? error.message : '企查查核验失败';
+    flushDb(true);
+    queueChatContinuation(approval.chatId, `【企查查核验失败】${approval.error}。请在报告中注明“企查查核验未完成”，然后继续用其他来源完成报告，并调用 shizheng_report_save 生成可供下载的最终报告。`);
+  } finally {
+    bridge.close();
+  }
+}
+
+/* ==========================================================================
    直连对话 Agent：不拼接任何提示词，原样转发到 DeepSeek Harness ACP。
    ========================================================================== */
 
@@ -1349,7 +2099,8 @@ async function runChat(chatId: string) {
     return { result, bridge };
   };
   const trace: { label: string; detail?: string; at: string }[] = [];
-  let bridge = chatBridges.get(chatId) ?? new DeepSeekAcpBridge(rootDir, chat.userId, 'chat');
+  const workspace = chatWorkspace(chat.id);
+  let bridge = chatBridges.get(chatId) ?? new DeepSeekAcpBridge(workspace, chat.userId, 'chat', chat.id);
   chatBridges.set(chatId, bridge);
   chat.status = 'running';
   chat.error = undefined;
@@ -1366,7 +2117,7 @@ async function runChat(chatId: string) {
       chat.messages.push({ id: id('msg'), role: 'system', text: '上一次 Harness 会话已失效，已开始新会话（之前的上下文不再保留）。', at: now() });
       bridge.close();
       chatBridges.delete(chatId);
-      bridge = new DeepSeekAcpBridge(rootDir, chat.userId, 'chat');
+      bridge = new DeepSeekAcpBridge(workspace, chat.userId, 'chat', chat.id);
       chatBridges.set(chatId, bridge);
       result = (await attempt(undefined, bridge)).result;
     }
@@ -1375,6 +2126,7 @@ async function runChat(chatId: string) {
     chat.status = 'idle';
     chat.updatedAt = now();
     flushDb(true);
+    drainChatContinuations(chatId);
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
     chat.status = 'failed';
@@ -1382,6 +2134,7 @@ async function runChat(chatId: string) {
     chat.messages.push({ id: id('msg'), role: 'system', text: `对话失败：${message}`, at: now() });
     chat.updatedAt = now();
     flushDb(true);
+    drainChatContinuations(chatId);
   }
 }
 

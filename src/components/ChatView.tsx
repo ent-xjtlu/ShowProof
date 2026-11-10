@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChatSession } from '../domain'
+import { chatApi, type ApprovalItem, type WorkspaceFile } from '../lib/chatApi'
 import { clock } from '../lib/format'
 import { Markdown } from './Markdown'
+
+const formatBytes = (value: number) => value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KB` : `${value} B`
 
 interface Props {
   chats: ChatSession[]
@@ -17,8 +20,37 @@ interface Props {
 
 export function ChatView({ chats, active, busy, error, onSelect, onCreate, onSend, onCancel, onDelete }: Props) {
   const [text, setText] = useState('')
+  const [files, setFiles] = useState<WorkspaceFile[]>([])
+  const [approvals, setApprovals] = useState<ApprovalItem[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
+
+  const refreshArtifacts = useCallback(async (chatId: string) => {
+    try {
+      const [fileResult, approvalResult] = await Promise.all([chatApi.files(chatId), chatApi.approvals(chatId)])
+      setFiles(fileResult.files)
+      setApprovals(approvalResult.approvals)
+    } catch {
+      /* 侧栏信息不阻塞对话 */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!active) { setFiles([]); setApprovals([]); return }
+    void refreshArtifacts(active.id)
+    const timer = setInterval(() => void refreshArtifacts(active.id), active.status === 'running' ? 4000 : 15000)
+    return () => clearInterval(timer)
+  }, [active?.id, active?.status, active?.messages.length, refreshArtifacts])
+
+  const decide = async (approvalId: string, decision: 'approve' | 'reject') => {
+    try {
+      await chatApi.decide(approvalId, decision)
+      if (active) await refreshArtifacts(active.id)
+    } catch {
+      /* 审批失败时保留卡片，用户可重试 */
+    }
+  }
+
 
   useEffect(() => {
     const el = scrollRef.current
@@ -79,9 +111,10 @@ export function ChatView({ chats, active, busy, error, onSelect, onCreate, onSen
               {active.status === 'running' && <button type="button" className="btn btn--ghost" onClick={onCancel}>停止</button>}
             </header>
 
+            <div className="chatpane__main">
             <div className="chatpane__scroll" ref={scrollRef}>
-              {active.messages.length === 0 && <p className="chatpane__hint">直接输入问题，消息会原样发给 Harness。</p>}
-              {active.messages.map((message) => (
+              {active.messages.filter((message) => !message.internal).length === 0 && <p className="chatpane__hint">直接输入问题，消息会原样发给 Harness。</p>}
+              {active.messages.filter((message) => !message.internal).map((message) => (
                 <article key={message.id} className="msg" data-role={message.role}>
                   <div className="msg__meta mono">
                     <span>{message.role === 'user' ? '你' : message.role === 'assistant' ? 'Harness' : '系统'}</span>
@@ -123,6 +156,47 @@ export function ChatView({ chats, active, busy, error, onSelect, onCreate, onSen
               )}
             </div>
 
+            <aside className="chatfiles" aria-label="文件与审核">
+              <header className="chatfiles__head">
+                <span className="mono">文件 · {files.length}</span>
+                <button type="button" className="btn btn--ghost chatfiles__refresh" onClick={() => void refreshArtifacts(active.id)}>刷新</button>
+              </header>
+              {approvals.length > 0 && (
+                <div className="approval">
+                  <p className="approval__title">待审核 · 企查查</p>
+                  {approvals.map((approval) => (
+                    <div key={approval.id} className="approval__item">
+                      <p className="approval__companies">{approval.companies.join('、')}</p>
+                      <p className="approval__note">同意后才会调用企查查；审核期间 Agent 不会被阻塞。</p>
+                      <div className="approval__actions">
+                        <button type="button" className="btn btn--primary" onClick={() => void decide(approval.id, 'approve')}>同意核验</button>
+                        <button type="button" className="btn btn--ghost" onClick={() => void decide(approval.id, 'reject')}>跳过</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {files.length === 0 ? (
+                <p className="chatfiles__empty">Agent 生成的文件会出现在这里，可直接下载。</p>
+              ) : (
+                <ul className="chatfiles__list">
+                  {files.map((file) => (
+                    <li key={file.path} className="chatfiles__item">
+                      <div className="chatfiles__meta">
+                        <span className="chatfiles__name" title={file.path}>{file.name}</span>
+                        <span className="chatfiles__sub mono">{formatBytes(file.size)} · {clock(file.updatedAt)}</span>
+                      </div>
+                      {file.pdfUrl && (
+                        <a className="btn btn--ghost chatfiles__dl" href={file.pdfUrl}>PDF</a>
+                      )}
+                      <a className="btn btn--ghost chatfiles__dl" href={file.downloadUrl}>下载</a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </aside>
+            </div>
+
             {error && <p className="chatpane__error" role="alert">{error}</p>}
 
             <div className="chatpane__compose">
@@ -131,10 +205,11 @@ export function ChatView({ chats, active, busy, error, onSelect, onCreate, onSen
                 className="input input--area chatpane__input"
                 rows={3}
                 value={text}
-                placeholder="输入消息，Ctrl / ⌘ + Enter 发送"
+                placeholder="输入消息，Shift + Enter 发送"
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  if (event.nativeEvent.isComposing) return
+                  if ((event.shiftKey || event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                     event.preventDefault()
                     send()
                   }

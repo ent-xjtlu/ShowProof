@@ -9,7 +9,7 @@
     "dev:client": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "start": "concurrently -k \"npm:serve:server\" \"npm:serve:client\"",
-    "test": "node --test tests/api-smoke.test.mjs && node --import tsx --test tests/exhibition.test.ts",
+    "test": "node --test tests/api-smoke.test.mjs tests/agent-api.test.mjs && node --import tsx --test tests/exhibition.test.ts",
     "test:ui": "playwright test",
     "serve:server": "tsx server/index.ts",
     "serve:client": "vite preview --host 0.0.0.0 --port 5173",

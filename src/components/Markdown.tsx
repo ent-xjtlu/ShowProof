@@ -67,7 +67,9 @@ interface MarkdownProps {
 }
 
 export function Markdown({ source, onCitation }: MarkdownProps): ReactNode {
-  const lines = source.replace(/\r\n/g, '\n').split('\n')
+  // 模型偶尔把换行输出成字面量 \n；在渲染层还原，避免整段挤成一行。
+  const normalized = source.replace(/\r\n/g, '\n').replace(/\\n/g, '\n')
+  const lines = normalized.split('\n')
   const out: ReactNode[] = []
   let key = 0
   let i = 0
@@ -106,6 +108,36 @@ export function Markdown({ source, onCitation }: MarkdownProps): ReactNode {
         <pre key={`pre${key++}`}>
           <code>{code.join('\n')}</code>
         </pre>,
+      )
+      continue
+    }
+
+    // GFM 表格：| a | b |  +  | --- | --- |
+    if (line.trim().startsWith('|') && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(lines[i + 1])) {
+      flush()
+      const splitRow = (row: string) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+      const header = splitRow(line)
+      i += 2
+      const rows: string[][] = []
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        rows.push(splitRow(lines[i]))
+        i += 1
+      }
+      out.push(
+        <div className="md__table" key={`tw${key++}`}>
+          <table>
+            <thead>
+              <tr>{header.map((cell, idx) => <th key={idx}><InlineText text={cell} onCitation={onCitation} /></th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((cell, colIndex) => <td key={colIndex}><InlineText text={cell} onCitation={onCitation} /></td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
       )
       continue
     }

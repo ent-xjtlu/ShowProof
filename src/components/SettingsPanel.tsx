@@ -18,6 +18,7 @@ export function SettingsPanel({ open, onClose }: Props) {
   const [qccConfigured, setQccConfigured] = useState(false)
   const [mineruKey, setMineruKey] = useState('')
   const [mineruConfigured, setMineruConfigured] = useState(false)
+  const [agentCatalog, setAgentCatalog] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -35,6 +36,7 @@ export function SettingsPanel({ open, onClose }: Props) {
         setCustomConfigured(Boolean(payload.customApi?.configured))
         setQccConfigured(Boolean(payload.qccMcp?.configured))
         setMineruConfigured(Boolean(payload.mineru?.configured))
+        setAgentCatalog(payload.agent?.catalogEnabled !== false)
         if (payload.customApi?.protocol) setCustomProtocol(payload.customApi.protocol)
         if (payload.customApi?.baseUrl) setCustomBaseUrl(payload.customApi.baseUrl)
         if (payload.customApi?.model) setCustomModel(payload.customApi.model)
@@ -62,6 +64,7 @@ export function SettingsPanel({ open, onClose }: Props) {
           ...(qccKey.trim() ? { qccApiKey: qccKey.trim() } : {}),
           ...(mineruKey.trim() ? { mineruApiKey: mineruKey.trim() } : {}),
           ...(qccServers.trim() ? { qccServers: qccServers.trim() } : {}),
+          agentCatalog,
         }),
       })
       const payload = await response.json().catch(() => ({}))
@@ -99,6 +102,13 @@ export function SettingsPanel({ open, onClose }: Props) {
             <label className="settings-field">模型名称<input value={customModel} onChange={(event) => setCustomModel(event.target.value)} type="text" placeholder="model-name" /></label>
             <label className="settings-field">API Key<input value={customApiKey} onChange={(event) => setCustomApiKey(event.target.value)} type="password" autoComplete="off" /></label>
           </>}
+          <div className="settings-divider"><span className="mono">Agent 能力</span><span className="settings-field__configured">按对话隔离工作区</span></div>
+          <label className="settings-check">
+            <input type="checkbox" checked={agentCatalog} onChange={(event) => setAgentCatalog(event.target.checked)} />
+            <span>允许 Agent 读取并增删改展会目录（删除进回收站，可恢复）</span>
+          </label>
+          <p className="settings-panel__hint">开启后，对话中的 Agent 可以直接加入、修改、归档你的展会记录，并把报告与资料写成可下载文件。工作区按对话隔离，Agent 不能访问数据库或其他用户数据。</p>
+
           <div className="settings-divider"><span className="mono">企查查 MCP（可选）</span><span className="settings-field__configured">{qccConfigured ? '已配置' : '未配置'}</span></div>
           <label className="settings-field">企查查 API Key<input value={qccKey} onChange={(event) => setQccKey(event.target.value)} type="password" autoComplete="off" placeholder={qccConfigured ? '已保存，留空则不修改' : '填写后启用企业工商核验'} /></label>
           <label className="settings-field">自定义 MCP Server（可选，JSON）<textarea value={qccServers} onChange={(event) => setQccServers(event.target.value)} rows={3} placeholder='{"qcc-company":{"url":"https://agent.qcc.com/mcp/company/stream"}}' /></label>
