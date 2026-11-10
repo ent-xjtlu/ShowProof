@@ -2033,3 +2033,112 @@
   font-size: 10px;
   line-height: 1.6;
 }
+
+/* 文件库 */
+.files-panel .settings-panel__body {
+  gap: 14px;
+}
+
+.files-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  background: var(--surface-lift);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.files-group {
+  border: 1px solid var(--rule);
+  background: #fff;
+}
+
+.files-group__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.files-group__title {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.files-group__title:hover {
+  color: var(--copper);
+}
+
+.files-group__count {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.files-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.files-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px dashed var(--rule);
+}
+
+.files-row:last-child {
+  border-bottom: 0;
+}
+
+.files-row__meta {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.files-row__name {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-row__sub {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.files-row__btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* 抽屉面板需要盖住顶栏，否则标题与关闭按钮会被 topbar 遮住 */
+.settings-scrim {
+  z-index: 60;
+}
+
+.settings-panel {
+  z-index: 61;
+}

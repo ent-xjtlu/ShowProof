@@ -556,11 +556,14 @@ class DeepSeekAcpBridge {
     let sessionId = existingSessionId;
     if (!sessionId) {
       const settings = getIntegrationSettings(this.userId);
+      const chatScreenshots = this.chatId ? path.join(chatWorkspace(this.chatId), 'screenshots') : undefined;
+      if (chatScreenshots) fs.mkdirSync(chatScreenshots, { recursive: true });
       const mcpServers = buildMcpServers(settings, {
         includeCatalog: settings.agentCatalog !== false,
         agentToken: this.agentToken(),
         chatId: this.chatId,
         includeQcc: false,
+        screenshotDir: chatScreenshots,
       });
       const session = await this.request('session/new', { cwd: this.cwd, mcpServers });
       sessionId = String(session.sessionId);
@@ -623,12 +626,12 @@ const qccHttpServers = [
   ['qcc-history', 'history'], ['qcc-executive', 'executive'], ['qcc-legal-regulation', 'regulation'],
   ['qcc-legal-case', 'case'], ['qcc-tender', 'tender'], ['qcc-document', 'document']
 ] as const;
-function buildMcpServers(settings?: IntegrationSettings, options?: { includeCatalog?: boolean; agentToken?: string; chatId?: string; includeQcc?: boolean }) {
+function buildMcpServers(settings?: IntegrationSettings, options?: { includeCatalog?: boolean; agentToken?: string; chatId?: string; includeQcc?: boolean; screenshotDir?: string }) {
   const playwrightCommand = process.env.DEEPSEEK_HARNESS_COMMAND || process.execPath;
   const playwrightScript = process.env.PLAYWRIGHT_MCP_SCRIPT || path.join(rootDir, 'server/playwright-mcp.mjs');
   const playwrightBrowserPath = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(rootDir, 'build/playwright-browsers');
   const ocrLangPath = process.env.SHIZHENG_OCR_LANG_PATH || path.join(rootDir, 'build/ocr-data');
-  const screenshotDir = process.env.SHIZHENG_SCREENSHOT_DIR || path.join(dataDir, 'screenshots');
+  const screenshotDir = options?.screenshotDir || process.env.SHIZHENG_SCREENSHOT_DIR || path.join(dataDir, 'screenshots');
   const ocrCacheDir = process.env.SHIZHENG_OCR_CACHE_DIR || path.join(dataDir, 'ocr-cache');
   const servers: any[] = [{
     name: 'playwright',
@@ -1960,6 +1963,19 @@ if (process.env.SHIZHENG_TEST_MODE === '1') {
     res.json({ token: issueAgentGrant(user.id, chat.id) });
   });
 }
+
+app.get('/api/files', requireUser, (req, res) => {
+  const user = (req as Request & { user: User }).user;
+  const chats = db.chats.filter((item) => item.userId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const files = chats.flatMap((chat) => listWorkspaceFiles(chat.id).map((file) => ({
+    ...file,
+    chatId: chat.id,
+    chatTitle: chat.title,
+    downloadUrl: downloadUrl(chat.id, file.path),
+    ...(file.name.endsWith('.md') ? { pdfUrl: downloadUrl(chat.id, file.path, 'pdf') } : {}),
+  }))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  res.json({ files, chatCount: chats.length, totalBytes: files.reduce((sum, file) => sum + file.size, 0) });
+});
 
 app.get('/api/chats/:id/files', requireUser, (req, res) => {
   const chat = getChat(req, res);

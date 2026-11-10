@@ -112,6 +112,10 @@ test('agent can write, list and download workspace files', async () => {
   assert.match(download.headers.get('content-disposition') || '', /attachment/);
   assert.match(await download.text(), /测试内容/);
 
+  const all = await api('/api/files');
+  assert.equal(all.status, 200);
+  assert.ok(all.payload.files.some((file) => file.chatId === chatId && file.path === 'notes/hello.md'));
+
   const listedFile = listed.payload.files.find((file) => file.path === 'notes/hello.md');
   assert.ok(listedFile.downloadUrl.includes('h='));
   const direct = await fetch(`http://localhost:${port}${listedFile.downloadUrl}`);

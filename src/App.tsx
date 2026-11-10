@@ -6,6 +6,7 @@ import { TopBar } from './components/TopBar'
 import { LoginScreen } from './components/LoginScreen'
 import { SettingsPanel } from './components/SettingsPanel'
 import { HelpPanel } from './components/HelpPanel'
+import { FilesPanel } from './components/FilesPanel'
 import { CompanyForm } from './components/CompanyForm'
 import { ExhibitionList } from './components/ExhibitionList'
 import { ExhibitionDetail } from './components/ExhibitionDetail'
@@ -35,6 +36,7 @@ export default function App() {
   const [saving, setSaving] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [seedText, setSeedText] = useState<string | null>(null)
   const [mode, setMode] = useState<'exhibition' | 'chat'>('exhibition')
   const [chats, setChats] = useState<ChatSession[]>([])
@@ -446,6 +448,7 @@ export default function App() {
         onModeChange={(next) => { setMode(next); if (next === 'chat' && !chats.length) void chatApi.list().then(setChats).catch(() => undefined) }}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenHelp={() => setHelpOpen(true)}
+        onOpenFiles={() => setFilesOpen(true)}
         onLogout={() => void logout()}
       />
 
@@ -554,6 +557,11 @@ export default function App() {
       )}
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <FilesPanel
+        open={filesOpen}
+        onClose={() => setFilesOpen(false)}
+        onOpenChat={(id) => { setActiveChatId(id); setMode('chat'); setFilesOpen(false); setChatError(null) }}
+      />
       <HelpPanel
         open={helpOpen}
         onClose={() => setHelpOpen(false)}

@@ -13,10 +13,11 @@ interface Props {
   onModeChange: (mode: Mode) => void
   onOpenSettings: () => void
   onOpenHelp: () => void
+  onOpenFiles: () => void
   onLogout: () => void
 }
 
-export function TopBar({ status, companyName, mode, onModeChange, onOpenSettings, onOpenHelp, onLogout }: Props) {
+export function TopBar({ status, companyName, mode, onModeChange, onOpenSettings, onOpenHelp, onOpenFiles, onLogout }: Props) {
   return (
     <header className="topbar">
       <div className="brand">
@@ -44,6 +45,7 @@ export function TopBar({ status, companyName, mode, onModeChange, onOpenSettings
           <span className="status__dot" aria-hidden />
           {STATUS_TEXT[status]}
         </span>
+        <button type="button" className="topbar__detail" onClick={onOpenFiles}>文件</button>
         <button type="button" className="topbar__detail" onClick={onOpenHelp}>帮助</button>
         <button type="button" className="topbar__detail" onClick={onOpenSettings}>连接设置</button>
         <button type="button" className="topbar__detail" onClick={onLogout}>退出</button>
