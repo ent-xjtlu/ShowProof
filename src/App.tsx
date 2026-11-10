@@ -13,6 +13,7 @@ import { ExhibitionDetail } from './components/ExhibitionDetail'
 import { DiscoveryProgress } from './components/DiscoveryProgress'
 import { WorkspaceRail } from './components/WorkspaceRail'
 import { ChatView } from './components/ChatView'
+import { useI18n } from './i18n'
 import './workspace.css'
 
 type User = { id: string; email: string; name: string }
@@ -25,6 +26,7 @@ function mergeExhibitions(current: Exhibition[], incoming: Exhibition[]): Exhibi
 }
 
 export default function App() {
+  const { t } = useI18n()
   const [user, setUser] = useState<User | null | undefined>(undefined)
   const [setupRequired, setSetupRequired] = useState(false)
   const [profile, setProfile] = useState<CompanyProfile | null | undefined>(undefined)
@@ -56,13 +58,20 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    fetch('/api/auth/setup')
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!cancelled) setSetupRequired(Boolean(payload.required))
+      })
+      .catch(() => undefined)
+
     const token = localStorage.getItem(TOKEN_KEY)
     if (!token) {
       setUser(null)
       setProfile(null)
-      return
+      return () => { cancelled = true }
     }
-    let cancelled = false
     fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
       .then(async (response) => {
         if (!response.ok) throw new Error('unauthenticated')
@@ -76,7 +85,6 @@ export default function App() {
           setProfile(null)
         }
       })
-    fetch('/api/auth/setup').then((response) => response.json()).then((payload) => { if (!cancelled) setSetupRequired(Boolean(payload.required)) }).catch(() => undefined)
     return () => { cancelled = true }
   }, [])
 
@@ -435,7 +443,7 @@ export default function App() {
   }
 
   if (user === undefined) {
-    return <div className="auth-loading"><span className="waiting__bars" aria-hidden><i /><i /><i /></span>正在连接工作台…</div>
+    return <div className="auth-loading"><span className="waiting__bars" aria-hidden><i /><i /><i /></span>{t('app.connecting')}</div>
   }
 
   if (!user) {
@@ -443,7 +451,7 @@ export default function App() {
   }
 
   if (profile === undefined) {
-    return <div className="auth-loading"><span className="waiting__bars" aria-hidden><i /><i /><i /></span>正在载入企业画像…</div>
+    return <div className="auth-loading"><span className="waiting__bars" aria-hidden><i /><i /><i /></span>{t('app.loadingProfile')}</div>
   }
 
   const activeDiscovery = discoveries.find((item) => item.id === discoveryId) ?? discoveries.find((item) => item.status === 'running') ?? null
@@ -520,15 +528,15 @@ export default function App() {
               />
             ) : (
               <section className="panel empty">
-                <p className="eyebrow mono">EMPTY DESK · 还没有展会</p>
-                <h1 className="panel__title">从一次检索开始</h1>
-                <p className="panel__lede">软件会按你的企业画像，多轮检索相关展会并调查参展企业。</p>
+                <p className="eyebrow mono">{t('app.emptyEyebrow')}</p>
+                <h1 className="panel__title">{t('app.emptyTitle')}</h1>
+                <p className="panel__lede">{t('app.emptyLede')}</p>
                 <div className="empty__actions">
                   <button type="button" className="btn btn--primary" onClick={() => void startDiscovery()} disabled={working}>
-                    {working ? '检索中…' : '开始找展会'}
+                    {working ? t('workspace.searching') : t('app.startSearch')}
                     <span aria-hidden>↗</span>
                   </button>
-                  <button type="button" className="btn btn--ghost" onClick={() => setView('profile')}>调整企业画像</button>
+                  <button type="button" className="btn btn--ghost" onClick={() => setView('profile')}>{t('app.adjustProfile')}</button>
                 </div>
               </section>
             )
@@ -561,7 +569,7 @@ export default function App() {
           )}
 
           {profile && view === 'exhibition' && !selected && (
-            <section className="panel empty"><h1 className="panel__title">展会不存在</h1><button type="button" className="btn btn--ghost" onClick={() => setView('board')}>返回清单</button></section>
+            <section className="panel empty"><h1 className="panel__title">{t('app.notFound')}</h1><button type="button" className="btn btn--ghost" onClick={() => setView('board')}>{t('detail.back')}</button></section>
           )}
         </main>
       </div>

@@ -1,4 +1,5 @@
 import type { Discovery } from '../domain'
+import { useI18n } from '../i18n'
 
 interface Props {
   discovery: Discovery
@@ -6,27 +7,21 @@ interface Props {
   onBack: () => void
 }
 
-const STATUS_LABEL: Record<Discovery['status'], string> = {
-  running: '检索中',
-  completed: '已完成',
-  partial: '部分完成',
-  failed: '未完成',
-}
-
 export function DiscoveryProgress({ discovery, onCancel, onBack }: Props) {
+  const { t } = useI18n()
   const running = discovery.status === 'running'
   const recent = [...discovery.activity].reverse().slice(0, 30)
   return (
     <section className="panel progress">
       <header className="panel__head">
         <div>
-          <p className="eyebrow mono">DISCOVERY · 展会检索</p>
-          <h1 className="panel__title">{running ? '正在检索相关展会' : discovery.status === 'failed' ? '检索未完成' : '检索完成'}</h1>
+          <p className="eyebrow mono">DISCOVERY · {t('workspace.exhibitions')}</p>
+          <h1 className="panel__title">{running ? t('discovery.running') : discovery.status === 'failed' ? t('discovery.failed') : t('discovery.completed')}</h1>
           <p className="panel__lede">{discovery.stage}{discovery.error ? `：${discovery.error}` : ''}</p>
         </div>
         <div className="progress__actions">
-          {!running && <button type="button" className="btn btn--ghost" onClick={onBack}>返回展会清单</button>}
-          {running && <button type="button" className="btn btn--ghost" onClick={onCancel}>停止检索</button>}
+          {!running && <button type="button" className="btn btn--ghost" onClick={onBack}>{t('detail.back')}</button>}
+          {running && <button type="button" className="btn btn--ghost" onClick={onCancel}>{t('discovery.stop')}</button>}
         </div>
       </header>
 
@@ -35,9 +30,9 @@ export function DiscoveryProgress({ discovery, onCancel, onBack }: Props) {
       </div>
 
       <div className="progress__stats">
-        <div><b>{discovery.exhibitionIds.length}</b><span>候选展会</span></div>
-        <div><b>{discovery.activity.length}</b><span>执行事件</span></div>
-        <div><b className="progress__state">{STATUS_LABEL[discovery.status]}</b><span>当前状态</span></div>
+        <div><b>{discovery.exhibitionIds.length}</b><span>{t('workspace.exhibitions')}</span></div>
+        <div><b>{discovery.activity.length}</b><span>{t('workspace.recent')}</span></div>
+        <div><b className="progress__state">{t(`discovery.${discovery.status}`)}</b><span>{t('detail.status')}</span></div>
       </div>
 
       <p className="progress__note">
@@ -55,7 +50,7 @@ export function DiscoveryProgress({ discovery, onCancel, onBack }: Props) {
             </div>
           </li>
         ))}
-        {!recent.length && <li className="muted">等待第一个检索事件…</li>}
+        {!recent.length && <li className="muted">{t('discovery.waiting')}</li>}
       </ol>
     </section>
   )

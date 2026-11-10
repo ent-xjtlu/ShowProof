@@ -1,4 +1,5 @@
 import { FormEvent, useState } from 'react'
+import { useI18n } from '../i18n'
 
 interface User {
   id: string
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function LoginScreen({ setupRequired, onLogin }: Props) {
+  const { t } = useI18n()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -30,11 +32,11 @@ export function LoginScreen({ setupRequired, onLogin }: Props) {
         body: JSON.stringify({ ...(setupRequired ? { name } : {}), email, password }),
       })
       const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.message || '登录失败，请检查账号和密码。')
+      if (!response.ok) throw new Error(payload.message || t('login.error'))
       localStorage.setItem('domel_token', payload.token)
       onLogin(payload.user)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败')
+      setError(err instanceof Error ? err.message : t('login.error'))
     } finally {
       setBusy(false)
     }
@@ -48,34 +50,34 @@ export function LoginScreen({ setupRequired, onLogin }: Props) {
           <span className="brand__mark" aria-hidden />
           <div>
             <b>拾证</b>
-            <small>展会与企业信息助手</small>
+            <small>{t('brand.subtitle')}</small>
           </div>
         </div>
         <p className="login-card__eyebrow mono">EXHIBITION INTEL DESK · SECURE WORKSPACE</p>
-        <h1>把展会，变成机会。</h1>
+        <h1>{t('login.title')}</h1>
         <p className="login-card__lead">
-          {setupRequired ? '首次使用时创建本机工作账号，企业画像与调查数据只保存在当前设备。' : '登录后开始检索展会、调查参展企业并生成参展报告。'}
+          {setupRequired ? t('login.firstUse') : t('login.signInLead')}
         </p>
         <form onSubmit={submit} className="login-form">
           {setupRequired && <label>
-            显示名称
+            {t('login.displayName')}
             <input value={name} onChange={(event) => setName(event.target.value)} type="text" autoComplete="name" required />
           </label>}
           <label>
-            工作邮箱
+            {t('login.workEmail')}
             <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="username" required />
           </label>
           <label>
-            密码
+            {t('login.password')}
             <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
           </label>
           {error && <p className="login-error" role="alert">{error}</p>}
           <button type="submit" className="btn btn--primary login-form__submit" disabled={busy}>
-            {busy ? (setupRequired ? '正在创建…' : '正在进入…') : (setupRequired ? '创建本机账号' : '进入工作台')}
+            {busy ? (setupRequired ? t('login.createBusy') : t('login.signInBusy')) : (setupRequired ? t('login.create') : t('login.signIn'))}
             <span aria-hidden>↗</span>
           </button>
         </form>
-        <p className="login-card__foot mono">凭证只在本机服务端保存 · {setupRequired ? '首次启动需要创建账号' : '本机账号登录'}</p>
+        <p className="login-card__foot mono">{setupRequired ? t('login.footFirst') : t('login.footSignIn')}</p>
       </section>
     </main>
   )
