@@ -226,7 +226,9 @@ cd crawlers
 python3 trafilatura_extract.py --file urls.example.txt --out out/trafilatura
 ```
 
-每个脚本输出 `records.jsonl`、`pages/*.md` 和 `errors.jsonl`。Agent 可以先调用 `shizheng_crawlers` 获取实际路径与安装命令，再用 bash 运行；打包版脚本位于应用资源目录 `crawlers/`。
+每个脚本输出 `records.jsonl`、`pages/*.md` 和 `errors.jsonl`。首次启动会把模板复制到可写的数据目录 `DATA_DIR/crawlers/`，依赖装在那里：`cd "$DATA_DIR/crawlers" && ./setup.sh`。
+
+Agent 抓取网页时优先调用 `shizheng_fetch`（内部走 Trafilatura，可用 `engine` 切换 Crawl4AI / Scrapling）；`shizheng_crawlers` 用于查看路径、依赖和 Firecrawl/Scrapy 用法。
 
 详细说明、合规与限速建议见 [crawlers/README.md](crawlers/README.md)。
 

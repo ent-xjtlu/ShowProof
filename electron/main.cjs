@@ -46,7 +46,7 @@ async function prepareHarness() {
   process.env.PLAYWRIGHT_BROWSERS_PATH = app.isPackaged ? join(process.resourcesPath, 'playwright-browsers') : join(__dirname, '..', 'build', 'playwright-browsers')
   process.env.PLAYWRIGHT_MCP_SCRIPT = app.isPackaged ? join(process.resourcesPath, 'playwright-runtime', 'playwright-mcp.mjs') : join(__dirname, '..', 'server', 'playwright-mcp.mjs')
   process.env.SHIZHENG_AGENT_MCP_SCRIPT = app.isPackaged ? join(process.resourcesPath, 'playwright-runtime', 'agent-mcp.mjs') : join(__dirname, '..', 'server', 'agent-mcp.mjs')
-  process.env.SHIZHENG_CRAWLER_DIR = app.isPackaged ? join(process.resourcesPath, 'crawlers') : join(__dirname, '..', 'crawlers')
+  process.env.SHIZHENG_CRAWLER_SOURCE = app.isPackaged ? join(process.resourcesPath, 'crawlers') : join(__dirname, '..', 'crawlers')
   if (app.isPackaged && !fs.existsSync(join(runtime, 'package.json'))) {
     fs.mkdirSync(runtime, { recursive: true })
     fs.cpSync(bundledSource, runtime, { recursive: true, filter: (source) => !source.includes(`${require('node:path').sep}node_modules${require('node:path').sep}`) && !source.includes(`${require('node:path').sep}.git${require('node:path').sep}`) })

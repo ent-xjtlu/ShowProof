@@ -266,7 +266,31 @@ const agentGrants = new Map<string, AgentGrant>();
 const agentWorkspacesRoot = path.join(dataDir, 'agent-workspaces');
 const appUrl = process.env.SHIZHENG_APP_URL || `http://127.0.0.1:${process.env.PORT || 8787}`;
 const agentMcpScript = process.env.SHIZHENG_AGENT_MCP_SCRIPT || path.join(rootDir, 'server/agent-mcp.mjs');
-const crawlerDir = process.env.SHIZHENG_CRAWLER_DIR || path.join(rootDir, 'crawlers');
+const crawlerSource = process.env.SHIZHENG_CRAWLER_SOURCE || path.join(rootDir, 'crawlers');
+const crawlerDir = process.env.SHIZHENG_CRAWLER_DIR || path.join(dataDir, 'crawlers');
+
+/** 把随包/仓库里的爬虫模板复制到可写数据目录，venv 与输出留在本地。 */
+function ensureCrawlerWorkspace() {
+  try {
+    if (!fs.existsSync(crawlerSource)) return;
+    fs.mkdirSync(crawlerDir, { recursive: true });
+    fs.cpSync(crawlerSource, crawlerDir, {
+      recursive: true,
+      force: true,
+      filter: (source) => !/[\\/](?:\.venv|out|__pycache__)(?:[\\/]|$)/.test(source) && !source.endsWith('.pyc'),
+    });
+  } catch (error) {
+    console.error('准备爬虫工作区失败：', error);
+  }
+}
+ensureCrawlerWorkspace();
+
+function crawlerPython(): string {
+  const candidates = process.platform === 'win32'
+    ? [path.join(crawlerDir, '.venv', 'Scripts', 'python.exe')]
+    : [path.join(crawlerDir, '.venv', 'bin', 'python')];
+  return candidates.find((file) => fs.existsSync(file)) || (process.platform === 'win32' ? 'python' : 'python3');
+}
 
 function downloadHash(chatId: string, relative: string, kind: 'file' | 'pdf'): string {
   return crypto.createHash('sha256').update(`${db.downloadSecret || ''}:${kind}:${chatId}:${relative}`).digest('hex').slice(0, 32);
@@ -1924,19 +1948,75 @@ app.post('/api/agent/exhibitions/:id/restore', (req, res) => {
   res.json({ ok: true, exhibition: agentExhibitionView(exhibition) });
 });
 
+function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd, env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => { child.kill('SIGTERM'); }, timeoutMs);
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', (error) => { clearTimeout(timer); resolve({ code: -1, stdout, stderr: `${stderr}${error.message}` }); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout, stderr }); });
+  });
+}
+
+app.post('/api/agent/fetch', async (req, res) => {
+  const grant = requireAgentGrant(req, res, 'file:write');
+  if (!grant) return;
+  const raw = Array.isArray(req.body?.urls) ? req.body.urls : [req.body?.url];
+  const urls = raw.map((item: unknown) => asText(item, 500)).filter((item: string) => /^https?:\/\//i.test(item)).slice(0, 10);
+  if (!urls.length) return res.status(400).json({ error: 'URL_REQUIRED', message: '请提供 http(s) URL。' });
+  const engine = ['trafilatura', 'crawl4ai', 'scrapling'].includes(req.body?.engine) ? req.body.engine : 'trafilatura';
+  const script = engine === 'crawl4ai' ? 'crawl4ai_fetch.py' : engine === 'scrapling' ? 'scrapling_fetch.py' : 'trafilatura_extract.py';
+  const scriptPath = path.join(crawlerDir, script);
+  if (!fs.existsSync(scriptPath)) return res.status(500).json({ error: 'CRAWLER_MISSING', message: '爬虫脚本不存在，请重新安装应用或运行 setup.sh。' });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const outRelative = `crawl/${engine}-${stamp}`;
+  const outAbsolute = path.join(chatWorkspace(grant.chatId), outRelative);
+  fs.mkdirSync(outAbsolute, { recursive: true });
+  const urlsFile = path.join(outAbsolute, 'urls.txt');
+  fs.writeFileSync(urlsFile, urls.join('\n') + '\n');
+  const python = crawlerPython();
+  const result = await runCommand(python, [scriptPath, '--file', urlsFile, '--out', outAbsolute, '--workers', '2'], chatWorkspace(grant.chatId), 180000);
+  const recordsFile = path.join(outAbsolute, 'records.jsonl');
+  const records = fs.existsSync(recordsFile)
+    ? fs.readFileSync(recordsFile, 'utf8').split('\n').filter(Boolean).slice(0, 30).map((line) => {
+      try { const item = JSON.parse(line) as { url?: string; title?: string; text?: string; status?: string }; return { url: item.url, title: item.title, status: item.status, chars: (item.text || '').length }; } catch { return null; }
+    }).filter(Boolean)
+    : [];
+  const errorsFile = path.join(outAbsolute, 'errors.jsonl');
+  const errors = fs.existsSync(errorsFile) ? fs.readFileSync(errorsFile, 'utf8').split('\n').filter(Boolean).slice(0, 10) : [];
+  const files = listWorkspaceFiles(grant.chatId).filter((file) => file.path.startsWith(outRelative));
+  if (result.code !== 0 && !records.length) {
+    const installHint = engine === 'trafilatura'
+      ? `cd ${crawlerDir} && ./setup.sh`
+      : `cd ${crawlerDir} && ./setup.sh --optional`;
+    return res.status(502).json({
+      error: 'CRAWLER_FAILED',
+      message: `${engine} 抓取失败：${(result.stderr || result.stdout).slice(-600) || '未知错误'}`,
+      installHint,
+      engine,
+      files,
+    });
+  }
+  res.json({ engine, out: outRelative, count: records.length, records, errors, files, stdout: result.stdout.slice(-800) });
+});
+
 app.get('/api/agent/crawlers', (req, res) => {
   const grant = requireAgentGrant(req, res, 'catalog:read');
   if (!grant) return;
+  const python = crawlerPython();
   const scripts = [
-    { file: 'trafilatura_extract.py', engine: 'Trafilatura', license: 'Apache-2.0', requires: 'requests, trafilatura', usage: 'python3 trafilatura_extract.py --file urls.txt --out out/trafilatura' },
-    { file: 'crawl4ai_fetch.py', engine: 'Crawl4AI', license: 'Apache-2.0', requires: 'crawl4ai', usage: 'python3 crawl4ai_fetch.py --file urls.txt --out out/crawl4ai' },
-    { file: 'scrapling_fetch.py', engine: 'Scrapling', license: 'BSD-3-Clause', requires: 'scrapling', usage: 'python3 scrapling_fetch.py --file urls.txt --out out/scrapling' },
-    { file: 'firecrawl_client.py', engine: 'Firecrawl', license: 'AGPL-3.0', requires: 'FIRECRAWL_API_KEY', usage: 'FIRECRAWL_API_KEY=... python3 firecrawl_client.py --file urls.txt --out out/firecrawl' },
-    { file: 'scrapy_batch/scrapy.cfg', engine: 'Scrapy', license: 'BSD-3-Clause', requires: 'scrapy', usage: 'cd scrapy_batch && scrapy crawl batch -a urls=../urls.txt -O ../out/scrapy/records.jsonl' },
+    { file: 'trafilatura_extract.py', engine: 'Trafilatura', license: 'Apache-2.0', requires: 'requests, trafilatura', usage: `${python} trafilatura_extract.py --file urls.txt --out out/trafilatura` },
+    { file: 'crawl4ai_fetch.py', engine: 'Crawl4AI', license: 'Apache-2.0', requires: 'crawl4ai', usage: `${python} crawl4ai_fetch.py --file urls.txt --out out/crawl4ai` },
+    { file: 'scrapling_fetch.py', engine: 'Scrapling', license: 'BSD-3-Clause', requires: 'scrapling', usage: `${python} scrapling_fetch.py --file urls.txt --out out/scrapling` },
+    { file: 'firecrawl_client.py', engine: 'Firecrawl', license: 'AGPL-3.0', requires: 'FIRECRAWL_API_KEY', usage: `FIRECRAWL_API_KEY=... ${python} firecrawl_client.py --file urls.txt --out out/firecrawl` },
+    { file: 'scrapy_batch/scrapy.cfg', engine: 'Scrapy', license: 'BSD-3-Clause', requires: 'scrapy', usage: `cd scrapy_batch && scrapy crawl batch -a urls=../urls.txt -O ../out/scrapy/records.jsonl` },
   ].map((item) => ({ ...item, exists: fs.existsSync(path.join(crawlerDir, item.file)) }));
   res.json({
     dir: crawlerDir,
-    python: process.env.SHIZHENG_PYTHON || 'python3',
+    python,
     install: `cd ${crawlerDir} && ./setup.sh          # 核心依赖\ncd ${crawlerDir} && ./setup.sh --optional  # 动态抓取/Scrapy`,
     readme: path.join(crawlerDir, 'README.md'),
     scripts,

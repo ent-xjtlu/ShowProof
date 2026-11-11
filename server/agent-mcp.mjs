@@ -174,8 +174,21 @@ const tools = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'shizheng_fetch',
+    description: '抓取网页正文的首选工具：调用应用自带的 Trafilatura/Crawl4AI/Scrapling 脚本，批量抓取 URL 并保存为 Markdown，返回工作区文件路径。用户要求抓取/读取网页、批量采集、保存正文时，优先调用本工具；只有本工具不可用时才用 web_fetch。默认 Trafilatura（轻量）；动态页面用 crawl4ai；结构不固定用 scrapling。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        urls: { type: 'array', items: { type: 'string' }, description: '要抓取的 http(s) URL，最多 10 个' },
+        engine: { type: 'string', enum: ['trafilatura', 'crawl4ai', 'scrapling'], description: '抓取引擎，默认 trafilatura' },
+      },
+      required: ['urls'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'shizheng_crawlers',
-    description: '列出随应用附带的可选爬虫脚本（Trafilatura / Crawl4AI / Scrapling / Firecrawl / Scrapy）及安装命令。需要批量抓取展会官网、名录或报告时，先调用它确认路径与依赖，再用 bash 运行对应脚本。',
+    description: '列出随应用附带的可选爬虫脚本（Trafilatura / Crawl4AI / Scrapling / Firecrawl / Scrapy）、工作区路径与安装命令。日常抓取优先用 shizheng_fetch；需要 Firecrawl/Scrapy 或排查依赖时再调用本工具。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -234,6 +247,15 @@ async function callTool(name, args = {}) {
   }
   if (name === 'shizheng_files_list') {
     return textResult(await call('/api/agent/files'))
+  }
+  if (name === 'shizheng_fetch') {
+    const urls = Array.isArray(args.urls) ? args.urls.filter((item) => typeof item === 'string' && /^https?:\/\//i.test(item)) : []
+    if (!urls.length) throw new Error('请提供至少一个 http(s) URL。')
+    return textResult(await call('/api/agent/fetch', {
+      method: 'POST',
+      body: JSON.stringify({ urls: urls.slice(0, 10), engine: args.engine || 'trafilatura' }),
+      timeoutMs: 200000,
+    }))
   }
   if (name === 'shizheng_crawlers') {
     return textResult(await call('/api/agent/crawlers'))

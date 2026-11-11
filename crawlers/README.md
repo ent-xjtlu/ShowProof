@@ -65,7 +65,9 @@ scrapy crawl batch -a urls=../urls.example.txt -O ../out/scrapy/records.jsonl
 
 Agent 会通过 bash 调用脚本，产物留在本次对话工作区，可在右侧「文件」栏下载。
 
-打包版脚本位于应用资源目录 `crawlers/`；Agent 工具 `shizheng_crawlers` 会返回实际路径与安装命令。
+首次启动会把模板复制到可写的数据目录（`DATA_DIR/crawlers/`），依赖与输出都留在那里；Agent 工具 `shizheng_crawlers` 会返回实际路径与安装命令。
+
+Agent 抓取网页时优先使用 `shizheng_fetch`（Trafilatura / Crawl4AI / Scrapling），不需要自己拼 bash 命令。
 
 ## EasySpider
 

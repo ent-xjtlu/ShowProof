@@ -155,6 +155,12 @@ test('crawler presets are exposed to the agent', async () => {
   assert.match(response.payload.install, /setup\.sh/);
 });
 
+test('fetch tool rejects empty URL lists before running Python', async () => {
+  const response = await agent('/api/agent/fetch', { method: 'POST', body: JSON.stringify({ urls: [] }) });
+  assert.equal(response.status, 400);
+  assert.equal(response.payload.error, 'URL_REQUIRED');
+});
+
 test('QCC verification is rejected when QCC MCP is not configured', async () => {
   const response = await agent('/api/agent/qcc/verify', { method: 'POST', body: JSON.stringify({ companies: ['测试公司'] }) });
   assert.equal(response.status, 503);

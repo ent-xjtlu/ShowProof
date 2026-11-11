@@ -45,7 +45,7 @@ const EXAMPLES: { title: string; note: string; prompt: string }[] = [
   {
     title: '批量抓取网页（可选脚本）',
     note: '自带 Trafilatura / Crawl4AI / Scrapling / Firecrawl / Scrapy 模板；需先在本机运行 crawlers/setup.sh。',
-    prompt: '列出可用的爬虫脚本，用 trafilatura 抓取 urls.txt 里的页面，输出到工作区，并把结果整理成带来源的报告。',
+    prompt: '抓取 urls.txt 里的页面正文，保存到工作区，并把结果整理成带来源的报告。',
   },
   {
     title: '下载与导出 PDF',
