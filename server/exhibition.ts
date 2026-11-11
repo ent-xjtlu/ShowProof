@@ -137,6 +137,8 @@ export interface Exhibition {
   cost: CostEstimate
   sources: EvidenceSource[]
   watched: boolean
+  /** 最近一次调查的实时过程，供详情页展示。 */
+  activity?: { label: string; detail?: string; at: string }[]
   /** 记录来源：检索发现 / Agent 加入 / 手工录入。 */
   origin?: 'discovery' | 'agent' | 'manual'
   /** Agent 备注（加入理由、后续动作等）。 */

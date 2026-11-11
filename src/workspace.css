@@ -2160,3 +2160,91 @@
   font-family: inherit;
   font-size: 11px;
 }
+
+/* 展会调查实时过程 */
+.research-trace {
+  margin: 0 0 14px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.research-trace__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.research-trace__title {
+  flex: 1;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.research-trace__count {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.research-trace__list {
+  max-height: 220px;
+  margin: 0;
+  padding: 8px 12px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.research-trace__list li {
+  display: grid;
+  grid-template-columns: 52px minmax(120px, 220px) 1fr;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--rule);
+  font-size: 11px;
+}
+
+.research-trace__list li:last-child {
+  border-bottom: 0;
+}
+
+.research-trace__time {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.research-trace__label {
+  color: var(--ink);
+}
+
+.research-trace__detail {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-trace__empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.research-trace__hint {
+  margin: 0;
+  padding: 6px 12px 9px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.detailx__status {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.detailx__status select {
+  min-width: 82px;
+}

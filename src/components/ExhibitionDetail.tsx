@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ExhibitorRole, Exhibition } from '../domain'
 import { useI18n } from '../i18n'
+import { clock } from '../lib/format'
 
 const money = (value: number) => `¥${Math.round(value).toLocaleString('zh-CN')}`
 
@@ -84,6 +85,30 @@ export function ExhibitionDetail({ exhibition, busy, onBack, onResearch, onRefre
           <button type="button" className="btn btn--ghost" onClick={() => void exportAs('csv')} disabled={exporting !== null || !exhibition.exhibitors.length}>{exporting === 'csv' ? t('detail.exporting') : t('detail.exportCsv')}</button>
         </div>
       </header>
+
+      {(busy || (exhibition.activity?.length ?? 0) > 0) && (
+        <section className="research-trace" aria-live="polite">
+          <header className="research-trace__head">
+            {busy && <span className="waiting__bars" aria-hidden><i /><i /><i /></span>}
+            <span className="research-trace__title">{busy ? t('detail.activityRunning') : t('detail.activity')}</span>
+            <span className="research-trace__count mono">{t('detail.activitySteps', { count: exhibition.activity?.length ?? 0 })}</span>
+          </header>
+          {exhibition.activity?.length ? (
+            <ol className="research-trace__list">
+              {exhibition.activity.slice(-10).map((step, index) => (
+                <li key={`${step.at}-${index}`}>
+                  <span className="research-trace__time mono">{clock(step.at)}</span>
+                  <span className="research-trace__label">{step.label}</span>
+                  {step.detail && <span className="research-trace__detail">{step.detail}</span>}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="research-trace__empty">{t('detail.activityEmpty')}</p>
+          )}
+          <p className="research-trace__hint mono">{t('detail.activityHint')}</p>
+        </section>
+      )}
 
       {exhibition.status === 'researching' && (
         <p className="notice">{t('detail.researchingNotice')}</p>

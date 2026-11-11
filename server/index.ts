@@ -1353,24 +1353,25 @@ async function researchExhibition(exhibitionId: string, profile: CompanyProfile,
   if (!exhibition) return false;
   const discovery = db.discoveries.find((item) => item.id === exhibition.discoveryId);
   const step = (label: string, detail?: string) => {
-    if (!discovery) return;
-    discovery.activity.push({ label, detail, at: now(), status: 'running' });
-    trimActivity(discovery);
+    exhibition.activity ||= [];
+    exhibition.activity.push({ label, detail, at: now() });
+    if (exhibition.activity.length > 80) exhibition.activity.splice(0, exhibition.activity.length - 80);
+    if (discovery) {
+      discovery.activity.push({ label, detail, at: now(), status: 'running' });
+      trimActivity(discovery);
+    }
     flushDb();
   };
   try {
     exhibition.status = 'researching';
     exhibition.error = undefined;
+    exhibition.activity = [];
     exhibition.updatedAt = now();
     flushDb(true);
     step(`正在调查：${exhibition.name}`, '读取参展商名录并核对企业主营业务');
     const result = await withTimeout(bridge.run(buildDetailPrompt(profile, exhibition), (message) => {
       const event = summarizeAcpUpdate(message);
-      if (discovery) {
-        discovery.activity.push({ label: event.label, detail: event.text.slice(0, 240), at: now(), status: 'running' });
-        trimActivity(discovery);
-      }
-      flushDb();
+      step(event.label, event.text.slice(0, 240));
     }), 20 * 60 * 1000, `「${exhibition.name}」调查超时`);
 
     const detail = normalizeDetailPayload(extractJsonObject(result.finalText));
@@ -1415,6 +1416,7 @@ async function researchExhibition(exhibitionId: string, profile: CompanyProfile,
     exhibition.status = 'ready';
     exhibition.lastCheckedAt = now();
     exhibition.updatedAt = now();
+    step(`调查完成：${exhibition.name}`, `识别 ${exhibitors.length} 家企业 · 综合评分 ${score}`);
     if (previous) {
       const news = detail.notableUpdates.map((update) => ({ at: now(), type: 'status' as const, detail: `重点企业动态：${update}` }));
       exhibition.changes = [
@@ -1438,6 +1440,7 @@ async function researchExhibition(exhibitionId: string, profile: CompanyProfile,
     exhibition.status = 'failed';
     exhibition.error = message;
     exhibition.updatedAt = now();
+    step(`调查失败：${message}`);
     flushDb(true);
     return false;
   }
