@@ -26,7 +26,18 @@ cd crawlers
 source .venv/bin/activate
 ```
 
-需要 Python 3.10+。`setup.sh` 只在本机创建虚拟环境，不影响应用本身。
+需要 Python 3.10+。`setup.sh` 只在本机创建虚拟环境，不影响应用本身。网络不稳定时可改用镜像：
+
+```bash
+.venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements-core.txt
+```
+
+可选引擎的额外要求：
+
+- `crawl4ai`：部分依赖（如 `fastuuid`）在 Python 3.15 上没有预编译轮子，需要 Rust 工具链；建议用 Python 3.12/3.13，并安装 Playwright 浏览器。
+- `scrapling`：需要 `curl_cffi` 与 `patchright` 浏览器；只装库不够。
+- `scrapy`：直接可用（本机已验证 2.20.0）。
+- 核心 `trafilatura` 不依赖浏览器，推荐默认使用。
 
 ## 用法
 
