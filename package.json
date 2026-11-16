@@ -56,7 +56,7 @@
   },
   "build": {
     "appId": "ai.domel.shizheng",
-    "productName": "拾证",
+    "productName": "ExVis 展视",
     "artifactName": "shizheng-intel-desk-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
@@ -141,10 +141,11 @@
           "!**/*.pyc"
         ]
       }
-    ]
+    ],
+    "icon": "assets/icon.png"
   },
   "main": "electron/main.cjs",
-  "description": "拾证 · 展会与企业信息助手",
+  "description": "ExVis 展视 · 市场情报工作台",
   "author": {
     "name": "Domel",
     "email": "support@domel.com"

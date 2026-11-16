@@ -18,9 +18,9 @@ export function TopBar({ status, companyName, mode, onModeChange, onOpenSettings
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="brand__mark" aria-hidden />
+        <img className="brand__mark" src="/brand-mark.svg" alt="" aria-hidden />
         <span className="brand__text">
-          <span className="brand__name">拾证</span>
+          <span className="brand__name">ExVis <em>展视</em></span>
           <span className="brand__sub">{t('brand.subtitle')}</span>
         </span>
       </div>

@@ -199,7 +199,7 @@ const CHAT_PERSONA = [
   '- id: system-prompt',
   '  config:',
   '    personaPrefix: >-',
-  '      You are 拾证（Shizheng）, a Chinese-first AI assistant powered by the {{model}} model.',
+  '      You are ExVis（展视）, a Chinese-first AI assistant powered by the {{model}} model.',
   '',
 ].join('\n');
 function ensureChatPersonaPatch(): string {

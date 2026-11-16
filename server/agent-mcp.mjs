@@ -1,5 +1,5 @@
 /**
- * 拾证应用内 MCP Server（stdio）。
+ * ExVis 展视 应用内 MCP Server（stdio）。
  *
  * 让 DeepSeek Harness 直接读写当前用户的展会目录、把研究材料与报告写成
  * 可下载文件，并在调用企查查前请求用户审核。所有请求走本地 HTTP API，
@@ -16,7 +16,7 @@ const errorReply = (id, message) => reply(id, { isError: true, content: [{ type:
 const textResult = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] })
 
 async function call(pathname, options = {}) {
-  if (!token) throw new Error('缺少 Agent 令牌：请在拾证的对话中使用该工具。')
+  if (!token) throw new Error('缺少 Agent 令牌：请在 ExVis 展视 的对话中使用该工具。')
   const response = await fetch(`${appUrl}${pathname}`, {
     ...options,
     headers: {

@@ -70,7 +70,7 @@ async function createWindow() {
     minWidth: 980,
     minHeight: 680,
     backgroundColor: '#f4f7f8',
-    title: '拾证 · 展会与企业信息助手',
+    title: 'ExVis 展视 · 市场情报工作台',
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   })
   await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent('<body style="font:16px system-ui;padding:40px;color:#17323d"><h2>正在准备 DeepSeek Harness ACP</h2><p>首次启动会自动安装运行依赖，请保持网络连接。</p></body>')}`)

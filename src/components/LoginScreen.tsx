@@ -48,9 +48,9 @@ export function LoginScreen({ setupRequired, onLogin }: Props) {
       <section className="login-card">
         <button type="button" className="topbar__detail" onClick={toggleLocale}>{t('locale.switch')}</button>
         <div className="login-card__brand">
-          <span className="brand__mark" aria-hidden />
+          <img className="brand__mark" src="/brand-mark.svg" alt="" aria-hidden />
           <div>
-            <b>拾证</b>
+            <b>ExVis <em>展视</em></b>
             <small>{t('brand.subtitle')}</small>
           </div>
         </div>

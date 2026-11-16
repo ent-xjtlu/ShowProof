@@ -76,14 +76,14 @@ export function HelpPanel({ open, onClose, onUse }: Props) {
         <header className="settings-panel__head">
           <div>
             <span className="mono settings-panel__eyebrow">HELP · 帮助</span>
-            <h2>怎么用拾证</h2>
+            <h2>怎么用 ExVis 展视</h2>
           </div>
           <button type="button" className="detail__close" onClick={onClose} aria-label="关闭">×</button>
         </header>
 
         <div className="settings-panel__body">
           <p className="settings-panel__lead">
-            拾证有两条工作线：左侧「展会助手」做企业画像、展会发现与参展企业调查；右上「对话 Agent」通过 DeepSeek Harness
+            ExVis 展视有两条工作线：左侧「展会助手」做企业画像、展会发现与参展企业调查；右上「对话 Agent」通过 DeepSeek Harness
             直接操作目录、查资料、核验企业与生成报告。下面的示例可以直接填进对话。
           </p>
 

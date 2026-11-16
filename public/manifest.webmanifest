@@ -1,11 +1,11 @@
 {
-  "name": "拾证 · 市场情报工作台",
-  "short_name": "拾证",
-  "description": "AI 辅助市场情报工作台",
+  "name": "ExVis 展视 · 市场情报工作台",
+  "short_name": "ExVis 展视",
+  "description": "ExVis 展视：AI 辅助市场情报工作台",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f7f8",
-  "theme_color": "#168f82",
+  "theme_color": "#b5492a",
   "lang": "zh-CN",
   "icons": [{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
 }
